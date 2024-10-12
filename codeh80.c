@@ -57,6 +57,15 @@ typedef enum
   e_core_h80,
 } cpu_core_t;
 
+typedef enum {
+  bus_cmd_write =   0,
+  bus_cmd_read =    1,
+  bus_cmd_write_w = 2,
+  bus_cmd_read_w =  3,
+  bus_cmd_write_b = 4,
+  bus_cmd_read_b =  5,
+} bus_cmd_t;
+
 typedef enum
 {
   e_core_mask_h80 = 1 << e_core_h80,
@@ -864,13 +873,13 @@ static void DecodePUSH_POP(Word Code)
   BAsmCode[CodeLen++] = 0xf5;
 }
 
-static void DecodeIN_OUT(Word IsOUT)
+static void DecodeIN_OUT(Word BusCmd)
 {
   if (!ChkArgCnt(2, 2))
     return;
 
-  const tStrComp *pPortArg = IsOUT ? &ArgStr[1] : &ArgStr[2];
-  const tStrComp *pRegArg = IsOUT ? &ArgStr[2] : &ArgStr[1];
+  const tStrComp *pPortArg = (BusCmd & 0x1) ? &ArgStr[2] : &ArgStr[1];
+  const tStrComp *pRegArg =  (BusCmd & 0x1) ? &ArgStr[1] : &ArgStr[2];
 
   OpSize = 0;
   DecodeAdr(pPortArg, MModIndReg);
@@ -883,15 +892,9 @@ static void DecodeIN_OUT(Word IsOUT)
   }
 
   // TODO
-  if (IsOUT) {
-      CodeLen = 2;
-      BAsmCode[0] = 0xed;
-      BAsmCode[1] = 0x40 + (AdrPart << 3);
-  } else {
-      CodeLen = 2;
-      BAsmCode[0] = 0xed;
-      BAsmCode[1] = 0x40 + (AdrPart << 3);
-  }
+  CodeLen = 2;
+  BAsmCode[0] = 0xed;
+  BAsmCode[1] = 0x40 + (AdrPart << 3);
 }
 
 static void DecodeRET(Word Code)
@@ -1281,8 +1284,12 @@ static void InitFields(void)
   AddInstTable(InstTable, "ADD", 0, DecodeADD);
   AddInstTable(InstTable, "PUSH", 4, DecodePUSH_POP);
   AddInstTable(InstTable, "POP" , 0, DecodePUSH_POP);
-  AddInstTable(InstTable, "IN"  , 0, DecodeIN_OUT);
-  AddInstTable(InstTable, "OUT" , 1, DecodeIN_OUT);
+  AddInstTable(InstTable, "IN"  , bus_cmd_read, DecodeIN_OUT);
+  AddInstTable(InstTable, "IN.B", bus_cmd_read_b, DecodeIN_OUT);
+  AddInstTable(InstTable, "IN.W", bus_cmd_read_w, DecodeIN_OUT);
+  AddInstTable(InstTable, "OUT" , bus_cmd_write, DecodeIN_OUT);
+  AddInstTable(InstTable, "OUT.B", bus_cmd_write_b, DecodeIN_OUT);
+  AddInstTable(InstTable, "OUT.W", bus_cmd_write_w, DecodeIN_OUT);
   AddInstTable(InstTable, "RET" , 0, DecodeRET);
   AddInstTable(InstTable, "JP" , 0, DecodeJP);
   AddInstTable(InstTable, "CALL", 0, DecodeCALL);
