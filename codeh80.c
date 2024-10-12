@@ -210,9 +210,6 @@ static name_table_t RegNames[] = {
     { "bp", 19 },
     { NULL },
 };
-static const char Reg8Names[] = "BCDEHL*A";
-static int Reg16Cnt;
-static const char Reg16Names[][3] = { "BC", "DE", "HL", "SP", "IX", "IY" };
 
 static Boolean ExtendPrefix(PrefType *Dest, tOpPrefix AddPrefix)
 {
@@ -1407,35 +1404,8 @@ static Boolean QualifyQuote_Z80(const char *pStart, const char *pQuotePos)
 
 static void DissectReg_H80(char *p_dest, size_t dest_size, tRegInt value, tSymbolSize inp_size)
 {
-  // TODO
-  printf("#### %s(%d)\n", __func__, __LINE__);
-
-  switch (inp_size)
-  {
-    case eSymbolSize8Bit:
-      if ((value & 0xf0) == (IXPrefix & 0xf0))
-        as_snprintf(p_dest, dest_size, "%s%c", Reg16Names[4], (value & 1) ? 'L' : 'U');
-      else if ((value & 0xf0) == (IYPrefix & 0xf0))
-        as_snprintf(p_dest, dest_size, "%s%c", Reg16Names[5], (value & 1) ? 'L' : 'U');
-      else if ((value < 8) && (value != 6))
-        as_snprintf(p_dest, dest_size, "%c", Reg8Names[value]);
-      else
-        goto none;
-      break;
-    case eSymbolSize16Bit:
-      if ((value & 0xf0) == (IXPrefix & 0xf0))
-        as_snprintf(p_dest, dest_size, Reg16Names[4]);
-      else if ((value & 0xf0) == (IYPrefix & 0xf0))
-        as_snprintf(p_dest, dest_size, Reg16Names[5]);
-      else if (value < 4)
-        as_snprintf(p_dest, dest_size, "%s", Reg16Names[value]);
-      else
-        goto none;
-      break;
-    none:
-    default:
-      as_snprintf(p_dest, dest_size, "%d-%u", (int)inp_size, (unsigned)value);
-  }
+  printf("#### %s(%d): value=%d, inp_size=%d\n", __func__, __LINE__, value, inp_size);
+  as_snprintf(p_dest, dest_size, "r%d", value);
 }
 
 /*!------------------------------------------------------------------------
@@ -1492,7 +1462,6 @@ static void SwitchTo_Z80(void *p_user)
   ValidSegs |= 1 << SegIO;
   Grans[SegIO  ] = 1; ListGrans[SegIO  ] = 1; SegInits[SegIO  ] = 0;
   SegLimits[SegIO  ] = 0xffffu;
-  Reg16Cnt = 6;
 
   MakeCode = MakeCode_Z80;
   IsDef = IsDef_Z80;
