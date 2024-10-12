@@ -101,6 +101,7 @@
 #include "codez80.h"
 #include "codez8.h"
 #include "codez8000.h"
+#include "codeh80.h"
 #include "codekcpsm.h"
 #include "codekcp3.h"
 #include "codemic8.h"
@@ -4399,6 +4400,7 @@ int main(int argc, char **argv)
     codez80_init();
     codez8_init();
     codez8000_init();
+    codeh80_init();
     codekcpsm_init();
     codekcpsm3_init();
     codemico8_init();

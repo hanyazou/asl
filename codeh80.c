@@ -1,10 +1,10 @@
-/* codez80.c */
+/* codeh80.c */
 /*****************************************************************************/
 /* SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only                     */
 /*                                                                           */
 /* AS-Portierung                                                             */
 /*                                                                           */
-/* Codegenerator Zilog Z80/180/380                                           */
+/* Codegenerator hanyazou H80                                                */
 /*                                                                           */
 /*****************************************************************************/
 
@@ -32,7 +32,7 @@
 #include "onoff_common.h"
 #include "errmsg.h"
 
-#include "codez80.h"
+#include "codeh80.h"
 
 /*-------------------------------------------------------------------------*/
 /* Praefixtyp */
@@ -54,6 +54,7 @@ typedef enum
 
 typedef enum
 {
+  e_core_h80,
   e_core_sharp,
   e_core_z80,
   e_core_z80u,
@@ -130,7 +131,7 @@ typedef struct
 #define MModImmIsAbs (1 << ModImmIsAbs)
 #define MModMB (1 << ModMB)
 
-/* These masks deliberately omit the (special) 
+/* These masks deliberately omit the (special)
    Sharp/Gameboy addressing modes: */
 
 #define MModNoImm (MModReg8 | MModReg16 | MModIndReg16 | MModAbs | MModRef | MModInt | MModSPRel)
@@ -455,7 +456,7 @@ static Boolean DecodeReg8Core(const char *p_asc, Byte *p_ret)
         default:
           return False;
       }
-    }  
+    }
     default:
       return False;
   }
@@ -553,7 +554,7 @@ typedef struct
   tSymbolSize addr_reg_size;
 } z80_eval_cb_data_t;
 
-DECLARE_AS_EVAL_CB(z80_eval_cb)
+DECLARE_AS_EVAL_CB(h80_eval_cb)
 {
   z80_eval_cb_data_t *p_z80_eval_cb_data = (z80_eval_cb_data_t*)p_data;
   tSymbolSize this_reg_size;
@@ -691,7 +692,7 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
     z80_eval_cb_data_t z80_eval_cb_data;
 
     /* strip outer braces and spaces */
- 
+
     StrCompRefRight(&arg, pArg, !!is_indirect);
     StrCompShorten(&arg, !!is_indirect);
     KillPrefBlanksStrCompRef(&arg);
@@ -712,7 +713,7 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
 
     /* otherwise, walk through the components : */
 
-    as_eval_cb_data_ini(&z80_eval_cb_data.cb_data, z80_eval_cb);
+    as_eval_cb_data_ini(&z80_eval_cb_data.cb_data, h80_eval_cb);
     z80_eval_cb_data.addr_reg = 0xff;
     z80_eval_cb_data.addr_reg_size = eSymbolSizeUnknown;
     disp_acc = EvalStrIntExprWithResultAndCallback(&arg, Int32, &disp_eval_result, &z80_eval_cb_data.cb_data);
@@ -2125,7 +2126,7 @@ static void DecodeLDHL(Word Code)
   if (AdrPart != 3)
   {
     WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[1]);
-    return;    
+    return;
   }
   BAsmCode[1] = EvalStrIntExpression(&ArgStr[2], SInt8, &OK);
   if (OK)
@@ -3517,7 +3518,7 @@ static void DecodeINA_INAW_OUTA_OUTAW(Word Code)
   OpSize = Code & 1;
   if (!(OpSize ? DecodeAdr_HL(pRegArg) : DecodeAdr_A(pRegArg)))
     return;
-  
+
   AdrLong = EvalStrIntExpressionWithResult(pPortArg, ExtFlag ? Int32 : UInt8, &EvalResult);
   if (EvalResult.OK)
   {
@@ -3806,7 +3807,7 @@ static void DecodeJR(Word Code)
       return;
     }
   }
-    
+
   encode_jr_core(dist_type, Condition, dist);
 }
 
@@ -5005,27 +5006,16 @@ static void SwitchTo_Z80(void *p_user)
   InternSymbol = InternSymbol_Z80;
   SwitchFrom = DeinitFields; InitFields();
   DissectReg = DissectReg_Z80;
-  
+
   asmerr_warn_relative_add();
 }
 
 static const cpu_props_t cpu_props[] =
 {
-  { "GBZ80"     , e_core_sharp, e_core_flag_none },
-  { "LR35902"   , e_core_sharp, e_core_flag_none },
-  { "Z80"       , e_core_z80  , e_core_flag_none },
-  { "Z80UNDOC"  , e_core_z80u , e_core_flag_none },
-  { "Z180"      , e_core_z180 , e_core_flag_none },
-  { "RABBIT2000", e_core_r2000, e_core_flag_none },
-  { "eZ80190"   , e_core_ez80 , e_core_flag_i_8bit | e_core_flag_no_xio },
-  { "eZ80L92"   , e_core_ez80 , e_core_flag_i_8bit },
-  { "eZ80F91"   , e_core_ez80 , e_core_flag_none },
-  { "eZ80F92"   , e_core_ez80 , e_core_flag_i_8bit },
-  { "eZ80F93"   , e_core_ez80 , e_core_flag_i_8bit },
-  { "Z380"      , e_core_z380 , e_core_flag_none }
+  { "H80"       , e_core_h80  , e_core_flag_none }
 };
 
-void codez80_init(void)
+void codeh80_init(void)
 {
   const cpu_props_t *p_props;
 
