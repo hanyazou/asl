@@ -1239,9 +1239,12 @@ static void ModIntel(Word Code)
 {
   UNUSED(Code);
 
-  /* M80 compatibility: DEFB->DB, DEFW->DW */
-
-  strmov(OpPart.str.p_str + 1, OpPart.str.p_str + 3);
+  /* M80 compatibility: DEFB->DB, DEFW->DW and DEFM -> DB */
+  if (as_strcasecmp(OpPart.str.p_str, "DEFM") == 0) {
+    strmov(OpPart.str.p_str + 1, "B");
+  } else {
+    strmov(OpPart.str.p_str + 1, OpPart.str.p_str + 3);
+  }
   DecodeIntelPseudo(False);
 }
 
@@ -1289,6 +1292,7 @@ static void InitFields(void)
   AddInstTable(InstTable, "DI", 0, DecodeEI_DI);
   AddInstTable(InstTable, "EI", 8, DecodeEI_DI);
   AddInstTable(InstTable, "IM", 0, DecodeIM);
+  AddInstTable(InstTable, "DEFM", 0, ModIntel);
   AddInstTable(InstTable, "DEFB", 0, ModIntel);
   AddInstTable(InstTable, "DEFW", 0, ModIntel);
 
