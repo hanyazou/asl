@@ -34,24 +34,6 @@
 
 #include "codeh80.h"
 
-/*-------------------------------------------------------------------------*/
-/* Praefixtyp */
-
-typedef enum
-{
-  Pref_IN_N, Pref_IN_W, Pref_IB_W, Pref_IW_W, Pref_IB_N,
-  Pref_IN_LW, Pref_IB_LW, Pref_IW_LW, Pref_IW_N
-} PrefType;
-
-typedef enum
-{
-  ePrefixNone,
-  ePrefixW,   /* word processing */
-  ePrefixLW,  /* long word processing */
-  ePrefixIB,  /* one byte more in argument */
-  ePrefixIW   /* one word more in argument */
-} tOpPrefix;
-
 typedef enum
 {
   e_core_h80,
@@ -75,8 +57,7 @@ typedef enum
 typedef enum
 {
   e_core_flag_none = 0,
-  e_core_flag_i_8bit = 1 << 0,
-  e_core_flag_no_xio = 1 << 1
+  e_core_flag_16bit = 1 << 0,
 } cpu_core_flags_t;
 
 typedef struct
@@ -90,89 +71,59 @@ typedef struct
 # include "codez80.hpp"
 #endif
 
-#define LWordFlagName  "INLWORDMODE"
-
 #define ModNone (-1)
 #define ModReg 1
-#define ModIndReg 3
-#define ModImm 4
-
-#define ModAbs 5
-#define ModSPRel 8
-#define ModIndReg8 9
-#define ModSPAdd 10
-#define ModHLInc 11
-#define ModHLDec 12
-#define ModIOAbs 13
-#define ModImmIsAbs 14
-#define ModMB 15
+#define ModIndReg 2
+#define ModImm 3
 
 #define MModReg (1 << ModReg)
 #define MModIndReg (1 << ModIndReg)
 #define MModImm (1 << ModImm)
 
-#define MModAbs (1 << ModAbs)
-#define MModSPRel (1 << ModSPRel)
-#define MModIndReg8 (1 << ModIndReg8)
-#define MModSPAdd (1 << ModSPAdd)
-#define MModHLInc (1 << ModHLInc)
-#define MModHLDec (1 << ModHLDec)
-#define MModIOAbs (1 << ModIOAbs)
-#define MModImmIsAbs (1 << ModImmIsAbs)
-#define MModMB (1 << ModMB)
-
-/* These masks deliberately omit the (special)
-   Sharp/Gameboy addressing modes: */
-
-#define MModNoImm (MModReg | MModIndReg)
-#define MModAll (MModReg | MModIndReg | MModImm)
-
-#define IXPrefix 0xdd
-#define IYPrefix 0xfd
-
-#define AccReg 7
-#define MReg 6
-#define HReg 4
-#define LReg 5
-
-#define DEReg 1
-#define HLReg 2
-#define SPReg 3
-
 /*-------------------------------------------------------------------------*/
 /* Instruktionsgruppendefinitionen */
 
-typedef struct
-{
+typedef struct {
   cpu_core_mask_t core_mask;
   Word Code;
 } BaseOrder;
 
-typedef struct
-{
+typedef struct {
   const char *Name;
   Byte Code;
 } Condition;
 
 /*-------------------------------------------------------------------------*/
 
-static Byte PrefixCnt;
 static Byte AdrPart;
 static tSymbolSize OpSize;
 static Byte AdrVals[4];
 static ShortInt AdrMode;
 
 static BaseOrder *FixedOrders;
-static BaseOrder *AccOrders;
-static BaseOrder *HLOrders;
 static Condition *Conditions;
 
 static const cpu_props_t *p_curr_cpu_props;
 
-static Boolean MayLW,             /* Instruktion erlaubt 32 Bit */
-               ExtFlag;           /* Prozessor im 4GByte-Modus ? */
+typedef Word ins_t;
+typedef Byte flag_num_t;
+typedef Byte reg_num_t;
+typedef LongWord bus_addr_t;
 
-static PrefType LastPrefix;       /* von der letzten Anweisung generierter Praefix */
+// static const int reg_flag = 16;
+static const int     reg_flag_zero      = 0;  // equal zero
+static const int     reg_flag_carry     = 1;  // carry / borrow
+static const int     reg_flag_parity    = 2;  // 1: even / 0: odd
+static const int     reg_flag_overflow  = 2;  // overflow flag and parity flag share the same field
+static const int     reg_flag_sign      = 3;  // 1: negitive / 0: positive
+static const int     reg_flag_none      = 0x7f;
+static const int     reg_flag_not       = 0x80;
+// static const int reg_pc = 17;
+// static const int reg_sp = 18;
+// static const int reg_bp = 19;
+
+static const int bus_num_mem = 0;
+static const int bus_num_io = 1;
 
 typedef struct {
     char *name;
@@ -211,119 +162,222 @@ static name_table_t RegNames[] = {
     { NULL },
 };
 
-static Boolean ExtendPrefix(PrefType *Dest, tOpPrefix AddPrefix)
-{
-  Byte SPart,IPart;
+static ins_t I_NOP()    { return 0x0000; }
+static ins_t I_HALT()   { return 0x0001; }
+static ins_t I_RET()    { return 0x0002; }
+// 0000_0000_0000_0011 to 0111_1110 reserved
+static ins_t I_INV()    { return 0x007f; }
 
-  switch (*Dest)
-  {
-    case Pref_IB_N:
-    case Pref_IB_W:
-    case Pref_IB_LW:
-      IPart = 1;
-      break;
-    case Pref_IW_N:
-    case Pref_IW_W:
-    case Pref_IW_LW:
-      IPart = 2;
-      break;
-    default:
-      IPart = 0;
-  }
+static ins_t I_RET_N_(flag_num_t f) { return 0x0080 | f; }
+// static ins_t I_RET_NZ()             { return I_RET_N_(reg_flag_zero); }
+static ins_t I_RET_(flag_num_t f)   { return 0x0084 | f; }
+// static ins_t I_RET_Z()              { return I_RET_(reg_flag_zero); }
+// 0000_0000_1000_1000 to 1110_1111 reserved
+static ins_t I_LD_R_I(reg_num_t r)  { return 0x00f0 | r; }
 
-  switch (*Dest)
-  {
-    case Pref_IN_W:
-    case Pref_IB_W:
-    case Pref_IW_W:
-      SPart = 1;
-      break;
-    case Pref_IN_LW:
-    case Pref_IB_LW:
-    case Pref_IW_LW:
-      SPart = 2;
-      break;
-    default:
-      SPart = 0;
-  }
+static ins_t I_PUSH_R(reg_num_t r)  { return 0x0100 | r; }
+static ins_t I_POP_R(reg_num_t r)   { return 0x0110 | r; }
+// static ins_t I_EXTN_RW(reg_num_t r) { return 0x0120 | r; }
+// static ins_t I_EXTN_RB(reg_num_t r) { return 0x0130 | r; }
 
-  switch (AddPrefix)
-  {
-    case ePrefixW:
-      SPart = 1; break;
-    case ePrefixLW:
-      SPart = 2; break;
-    case ePrefixIB:
-      IPart = 1; break;
-    case ePrefixIW:
-      IPart = 2; break;
-    default:
-      return False;
-  }
+// static ins_t I_CPL_R(reg_num_t r)   { return 0x0140 | r; }
+// static ins_t I_NEG_R(reg_num_t r)   { return 0x0150 | r; }
+static ins_t I_LD_RW_I(reg_num_t r) { return 0x0160 | r; }
+static ins_t I_LD_RW_SI(reg_num_t r){ return 0x0170 | r; }
 
-  switch ((IPart << 4) | SPart)
-  {
-    case 0x00:
-      *Dest = Pref_IN_N;
-      break;
-    case 0x01:
-      *Dest = Pref_IN_W;
-      break;
-    case 0x02:
-      *Dest = Pref_IN_LW;
-      break;
-    case 0x10:
-      *Dest = Pref_IB_N;
-      break;
-    case 0x11:
-      *Dest = Pref_IB_W;
-      break;
-    case 0x12:
-      *Dest = Pref_IB_LW;
-      break;
-    case 0x20:
-      *Dest = Pref_IW_N;
-      break;
-    case 0x21:
-      *Dest = Pref_IW_W;
-      break;
-    case 0x22:
-      *Dest = Pref_IW_LW;
-      break;
-  }
+// static ins_t I_INVF(flag_num_t f)   { return 0x0180 | f; }
+// static ins_t I_SETF(flag_num_t f)   { return 0x0190 | f; }
+// static ins_t I_CLRF(flag_num_t f)   { return 0x01a0 | f; }
+// static ins_t I_TESTF(flag_num_t f)  { return 0x01b0 | f; }
 
-  return True;
+static ins_t I_CALL_R(reg_num_t r)  { return 0x01c0 | r; }
+static ins_t I_RST_N(bus_addr_t n)  { return 0x01d0 | (n/8); }
+static ins_t I_JP_R(reg_num_t r)    { return 0x01e0 | r; }
+static ins_t I_JR_R(reg_num_t r)    { return 0x01f0 | r; }
+
+//  0 0010_00ff_rrrr CALLN f, (R) (call R if F is false)
+static ins_t I_CALL_N_(flag_num_t f, reg_num_t r) {
+  return 0x0200 | (f << 4) | r;
+}
+// static ins_t I_CALL_NZ(reg_num_t r)	{ return I_CALL_N_(reg_flag_zero, r); }
+
+//  0 0010_01ff_rrrr CALL f, (R) (call to R if F is false)
+static ins_t I_CALL_(flag_num_t f, reg_num_t r) {
+  return 0x0240 | (f<<4) | r;
+}
+// static ins_t I_CALL_Z(reg_num_t r)  { return I_CALL_(reg_flag_zero, r); }
+
+//  0 0010_10ff_rrrr reserved
+//  0 0010_11ff_rrrr reserved
+
+//  0 0011_00ff_rrrr JPN f, (R) (jump to R if F is false)
+static ins_t I_JP_N_(flag_num_t f, reg_num_t r) {
+  return 0x0300 | (f<<4) | r;
+}
+// static ins_t I_JP_NZ(reg_num_t r)   { return I_JP_N_(reg_flag_zero, r); }
+// static ins_t I_JP_NC(reg_num_t r)   { return I_JP_N_(reg_flag_carry, r); }
+// static ins_t I_JP_NV(reg_num_t r)   { return I_JP_N_(reg_flag_overflow, r); }
+// static ins_t I_JP_NP(reg_num_t r)   { return I_JP_N_(reg_flag_parity, r); }
+// static ins_t I_JP_NS(reg_num_t r)   { return I_JP_N_(reg_flag_sign, r); }
+
+//  0 0011_01ff_rrrr JP f, (R) (jump to R if F is false)
+static ins_t I_JP_(flag_num_t f, reg_num_t r) {
+  return 0x0340 | (f<<4) | r;
+}
+// static ins_t I_JP_Z (reg_num_t r)   { return I_JP_(reg_flag_zero, r); }
+// static ins_t I_JP_C (reg_num_t r)   { return I_JP_(reg_flag_carry, r); }
+// static ins_t I_JP_V (reg_num_t r)   { return I_JP_(reg_flag_overflow, r); }
+// static ins_t I_JP_P (reg_num_t r)   { return I_JP_(reg_flag_parity, r); }
+// static ins_t I_JP_S (reg_num_t r)   { return I_JP_(reg_flag_sign, r); }
+
+//  0 0011_10ff_rrrr JRN f, (R) (jump to R if F is false)
+static ins_t I_JR_N_(flag_num_t f, reg_num_t r) {
+  return 0x0380 | (f<<4) | r;
+}
+// static ins_t I_JR_NZ(reg_num_t r)   { return I_JR_N_(reg_flag_zero, r); }
+// static ins_t I_JR_NC(reg_num_t r)   { return I_JR_N_(reg_flag_carry, r); }
+// static ins_t I_JR_NV(reg_num_t r)   { return I_JR_N_(reg_flag_overflow, r); }
+// static ins_t I_JR_NP(reg_num_t r)   { return I_JR_N_(reg_flag_parity, r); }
+// static ins_t I_JR_NS(reg_num_t r)   { return I_JR_N_(reg_flag_sign, r); }
+
+//  0 0011_11ff_rrrr JR f, (R) (jump to R if F is false)
+static ins_t I_JR_(flag_num_t f, reg_num_t r) {
+  return 0x03c0 | (f<<4) | r;
+}
+// static ins_t I_JR_Z (reg_num_t r)   { return I_JR_(reg_flag_zero, r); }
+// static ins_t I_JR_C (reg_num_t r)   { return I_JR_(reg_flag_carry, r); }
+// static ins_t I_JR_V (reg_num_t r)   { return I_JR_(reg_flag_overflow, r); }
+// static ins_t I_JR_P (reg_num_t r)   { return I_JR_(reg_flag_parity, r); }
+// static ins_t I_JR_S (reg_num_t r)   { return I_JR_(reg_flag_sign, r); }
+
+static ins_t I_SRA_R_I(reg_num_t a, Byte n)  { return 0x0400 | (a<<4) | n; }
+static ins_t I_SRL_R_I(reg_num_t a, Byte n)  { return 0x0500 | (a<<4) | n; }
+static ins_t I_SL_R_I (reg_num_t a, Byte n)  { return 0x0600 | (a<<4) | n; }
+static ins_t I_RLC_R_I(reg_num_t a, Byte n)  { return 0x0700 | (a<<4) | n; }
+static ins_t I_ADD_R_I(reg_num_t a, Byte n)  { return 0x0800 | (a<<4) | n; }
+static ins_t I_SUB_R_I(reg_num_t a, Byte n)  { return 0x0900 | (a<<4) | n; }
+
+//  0 1010_aaaa_bbbb DJNZ A, (B) (decrement A and jump to B if A is not zero)
+static ins_t I_DJNZ(reg_num_t a, reg_num_t b) { return 0x0a00 | (a<<4) | b; }
+
+//  0 110a_aaaa_bbbb EX A, B
+/*
+static ins_t I_EX_R_R(reg_num_t a, reg_num_t b) {
+  if (((a>>4)&1) && ~((b>>4)&1))
+    return 0x0c00 | (a << 4) | b;
+  else
+  if (~((a>>4)&1) && ((b>>4)&1))
+    return 0x0c00 | (b << 4) | a;
+  else
+    return I_INV();
+}
+*/
+
+//  0 1110_aaaa_bbbb reserved 空き
+//  0 1111_aaaa_bbbb reserved 空き
+
+//  1 dddd_nnnn_nnnn  reg[D] = n
+static ins_t I_LD_RB_I(reg_num_t r, int i) {
+  return 0x1000 | (r<<8) | i;
 }
 
-/*--------------------------------------------------------------------------*/
-/* Code fuer Praefix bilden */
-
-static void GetPrefixCode(PrefType inp, Byte *b1 ,Byte *b2)
-{
-  int z;
-
-  z = ((int)inp) - 1;
-  *b1 = 0xdd + ((z & 4) << 3);
-  *b2 = 0xc0 + (z & 3);
+//  2 dddd_nnnn_nnnn  reg[D] = n (signed)
+static ins_t I_LD_RB_SI(reg_num_t r, int i) {
+  return 0x2000 | (r<<8) | i;
 }
 
-/*--------------------------------------------------------------------------*/
-/* DD-Praefix addieren, nur EINMAL pro Instruktion benutzen! */
+//
+//  memory load/store
+//
+//  3 ttt0_aaaa_abbb R/W reg[A] from/to memory address reg[B]
+static ins_t I_BUS_ACCESS(Byte bus_cmd, Byte bus_num, reg_num_t rb, reg_num_t ra) {
+  return 0x3000 | (bus_cmd<<9) | (bus_num<<8) | (ra<<4) | rb;
+}
+static ins_t I_LD_M_R (reg_num_t rb, reg_num_t ra) {
+  return I_BUS_ACCESS(bus_cmd_write, bus_num_mem, ra, rb);
+}
+static ins_t I_LD_R_M (reg_num_t ra, reg_num_t rb) {
+  return I_BUS_ACCESS(bus_cmd_read, bus_num_mem, ra, rb);
+}
+static ins_t I_LD_M_RW(reg_num_t rb, reg_num_t ra) {
+  return I_BUS_ACCESS(bus_cmd_write_w, bus_num_mem, ra, rb);
+}
+static ins_t I_LD_RW_M(reg_num_t ra, reg_num_t rb) {
+  return I_BUS_ACCESS(bus_cmd_read_w, bus_num_mem, ra, rb);
+}
+static ins_t I_LD_M_RB(reg_num_t rb, reg_num_t ra) {
+  return I_BUS_ACCESS(bus_cmd_write_b, bus_num_mem, ra, rb);
+}
+static ins_t I_LD_RB_M(reg_num_t ra, reg_num_t rb) {
+  return I_BUS_ACCESS(bus_cmd_read_b, bus_num_mem, ra, rb);
+}
 
-static void ChangeDDPrefix(tOpPrefix Prefix)
-{
-  PrefType ActPrefix;
-  int z;
+//
+//  I/O read/write
+//
+//  3 ttt1_aaaa_abbb R/W reg[A] from/to I/O address reg[B]
+/*
+static ins_t I_OUT (reg_num_t rb, reg_num_t ra) {
+  return I_BUS_ACCESS(bus_cmd_write, bus_num_io, ra, rb);
+}
+static ins_t I_IN  (reg_num_t ra, reg_num_t rb) {
+  return I_BUS_ACCESS(bus_cmd_read, bus_num_io, ra, rb);
+}
+static ins_t I_OUTW(reg_num_t rb, reg_num_t ra) {
+  return I_BUS_ACCESS(bus_cmd_write_w, bus_num_io, ra, rb);
+}
+static ins_t I_INW (reg_num_t ra, reg_num_t rb) {
+  return I_BUS_ACCESS(bus_cmd_read_w, bus_num_io, ra, rb);
+}
+static ins_t I_OUTB(reg_num_t rb, reg_num_t ra) {
+  return I_BUS_ACCESS(bus_cmd_write_b, bus_num_io, ra, rb);
+}
+static ins_t I_INB (reg_num_t ra, reg_num_t rb) {
+  return I_BUS_ACCESS(bus_cmd_read_b, bus_num_io, ra, rb);
+}
+*/
 
-  ActPrefix = LastPrefix;
-  if (ExtendPrefix(&ActPrefix, Prefix))
-    if (LastPrefix != ActPrefix)
-    {
-      if (LastPrefix != Pref_IN_N) RetractWords(2);
-      for (z = PrefixCnt - 1; z >= 0; z--) BAsmCode[2 + z] = BAsmCode[z];
-      PrefixCnt += 2;
-      GetPrefixCode(ActPrefix, BAsmCode + 0, BAsmCode + 1);
-    }
+//
+//  move
+//
+static ins_t I_LD_R_R(reg_num_t rb, reg_num_t ra) {
+  if ((((ra>>4)&1) && ~((rb>>4)&1)) || (~((ra>>4)&1) && ~((rb>>4)&1)))
+    //  3 110a_aaaa_bbbb  move reg[A] to reg[B]
+    return 0x3c00 | (ra<<4) | rb;
+  else
+  if (~((ra>>4)&1) && ((rb>>4)&1))
+    //  3 111a_aaaa_bbbb  move reg[B] to reg[A]
+    return 0x3e00 | (rb<<4) | ra;
+  else
+    return I_INV();
+}
+
+//
+//  three register operations
+//
+static ins_t I_ADD(reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0x8000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_SUB(reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0x9000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_MUL(reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0xa000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_DIV(reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0xb000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_AND(reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0xc000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_OR (reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0xd000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_XOR(reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0xe000 | (dst<<8) | (ra<<4) | rb;
+}
+static ins_t I_CP (reg_num_t dst, reg_num_t ra, reg_num_t rb) {
+  return 0xf000 | (dst<<8) | (ra<<4) | rb;
 }
 
 /*!------------------------------------------------------------------------
@@ -336,10 +390,7 @@ static void ChangeDDPrefix(tOpPrefix Prefix)
 
 static LongWord EvalAbsAdrExpression(const tStrComp *pArg, tEvalResult *pEvalResult)
 {
-  if (ExtFlag)
-    return EvalStrIntExpressionWithResult(pArg, Int32, pEvalResult);
-  else
-    return EvalStrIntExpressionWithResult(pArg, UInt16, pEvalResult);
+  return EvalStrIntExpressionWithResult(pArg, Int32, pEvalResult);
 }
 
 /*==========================================================================*/
@@ -408,20 +459,10 @@ DECLARE_AS_EVAL_CB(h80_eval_cb)
   tSymbolSize this_reg_size;
   Byte this_reg;
 
-  /* special case for GameBoy/Sharp: FF00 always allowed, independent of radix: */
-
-  if (!as_strcasecmp(p_arg->str.p_str, "FF00"))
-  {
-    as_tempres_set_int(p_res, 0xff00);
-    return e_eval_ok;
-  }
-
-  switch (DecodeReg(p_arg, &this_reg, &this_reg_size, eSymbolSizeUnknown, False))
-  {
+  switch (DecodeReg(p_arg, &this_reg, &this_reg_size, eSymbolSizeUnknown, False)) {
     case eIsReg:
       if ((p_z80_eval_cb_data->addr_reg != 0xff)
-       || !as_eval_cb_data_stack_plain_add(p_data->p_stack))
-      {
+       || !as_eval_cb_data_stack_plain_add(p_data->p_stack)) {
         WrStrErrorPos(ErrNum_InvAddrMode, p_arg);
         return e_eval_fail;
       }
@@ -432,7 +473,7 @@ DECLARE_AS_EVAL_CB(h80_eval_cb)
     case eRegAbort:
       return e_eval_fail;
     default:
-       return e_eval_none;
+      return e_eval_none;
   }
 }
 
@@ -520,24 +561,12 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
     case eSymbolSizeUnknown:
       {
         LongWord ImmVal = EvalStrIntExpression(pArg, Int32, &OK);
-        if (OK)
-        {
-          AdrVals[0] = Lo(ImmVal);
-          AdrVals[1] = Hi(ImmVal);
+        if (OK) {
           AdrMode = ModImm;
-          AdrCnt = 2;
-          if (ImmVal <= 0xfffful);
-          else
-          {
-            AdrVals[AdrCnt++] = (ImmVal >> 16) & 0xff;
-            if (ImmVal <= 0xfffffful)
-              ChangeDDPrefix(ePrefixIB);
-            else
-            {
-              AdrVals[AdrCnt++] = (ImmVal >> 24) & 0xff;
-              ChangeDDPrefix(ePrefixIW);
-            }
-          }
+          AdrVals[AdrCnt++] = (ImmVal >>  0) & 0xff;
+          AdrVals[AdrCnt++] = (ImmVal >>  8) & 0xff;
+          AdrVals[AdrCnt++] = (ImmVal >> 16) & 0xff;
+          AdrVals[AdrCnt++] = (ImmVal >> 24) & 0xff;
         }
       }
       break;
@@ -567,18 +596,11 @@ static void AppendAdrVals(void)
   AppendVals(AdrVals, AdrCnt);
 }
 
-/*!------------------------------------------------------------------------
- * \fn     store_prefix(prefix_store_t *p_store, Byte old_prefix_cnt)
- * \brief  check whether another (index) prefix was added, and store it
- * \param  p_store place to store
- * \param  old_prefix_cnt prefix cound before possible addition
- * ------------------------------------------------------------------------ */
-
-typedef struct
+static void AppendIns(const ins_t ins)
 {
-  Byte cnt, value;
-  Boolean present;
-} prefix_store_t;
+  BAsmCode[CodeLen++] = Lo(ins);
+  BAsmCode[CodeLen++] = Lo(ins);
+}
 
 /*-------------------------------------------------------------------------*/
 /* Bedingung entschluesseln */
@@ -587,12 +609,12 @@ static Boolean DecodeCondition(const char *Name, int *Erg)
 {
   int z;
 
-  for (z = 0; Conditions[z].Name; z++)
-    if (!as_strcasecmp(Conditions[z].Name, Name))
-    {
+  for (z = 0; Conditions[z].Name; z++) {
+    if (!as_strcasecmp(Conditions[z].Name, Name)) {
       *Erg = Conditions[z].Code;
       return True;
     }
+  }
   *Erg = 0;
   return False;
 }
@@ -609,25 +631,11 @@ static Boolean DecodeCondition(const char *Name, int *Erg)
 
 static Boolean chk_core_mask(cpu_core_mask_t core_mask)
 {
-  if (!((core_mask >> p_curr_cpu_props->core) & 1))
-  {
+  if (!((core_mask >> p_curr_cpu_props->core) & 1)) {
     WrStrErrorPos(ErrNum_InstructionNotSupported, &OpPart);
     return False;
   }
   return True;
-}
-
-/*!------------------------------------------------------------------------
- * \fn     append_to_prefixes(Word code)
- * \brief  append oe or two byte opcode to existing prefixes
- * \param  code code to append (2 byte if MSB != 0)
- * ------------------------------------------------------------------------ */
-
-static void append_to_prefixes(Word code)
-{
-  if (Hi(code))
-    BAsmCode[PrefixCnt++] = Hi(code);
-  BAsmCode[PrefixCnt++] = Lo(code);
 }
 
 /*!------------------------------------------------------------------------
@@ -640,11 +648,11 @@ static void DecodeFixed(Word Index)
 {
   BaseOrder *POrder = FixedOrders + Index;
 
-  if (ChkArgCnt(0, 0)
-   && chk_core_mask(POrder->core_mask))
-  {
-    append_to_prefixes(POrder->Code);
-    CodeLen = PrefixCnt;
+  if (ChkArgCnt(0, 0) && chk_core_mask(POrder->core_mask)) {
+    BAsmCode[CodeLen++] = Lo(POrder->Code);
+    BAsmCode[CodeLen++] = Lo(POrder->Code);
+  } else {
+    // TODO, output error here
   }
 }
 
@@ -656,77 +664,98 @@ static void DecodeFixed(Word Index)
 
 static void DecodeLD(Word size)
 {
+  reg_num_t dst, src;
+  Boolean extend_sign;
+
   if (!ChkArgCnt(2, 2))
       return;
 
   switch (size) {
-  case 0:
-    OpSize = eSymbolSizeUnknown;
-    break;
-  case 1:
-    OpSize = eSymbolSize8Bit;
-    break;
-  case 2:
-    OpSize = eSymbolSize16Bit;
-    break;
+  case 0: OpSize = eSymbolSizeUnknown; extend_sign = False; break;
+  case 1: OpSize = eSymbolSize8Bit;    extend_sign = False; break;
+  case 2: OpSize = eSymbolSize16Bit;   extend_sign = False; break;
+  case 3: OpSize = eSymbolSize8Bit;    extend_sign = True; break;
+  case 4: OpSize = eSymbolSize16Bit;   extend_sign = True; break;
+  default:
+    WrError(ErrNum_InternalError);
+    return;
   }
 
   DecodeAdr(&ArgStr[1], MModReg | MModIndReg);
+  dst = AdrPart;
   switch (AdrMode) {
   case ModReg:
     DecodeAdr(&ArgStr[2], MModReg | MModIndReg | MModImm);
     switch (AdrMode) {
     case ModReg:    /* LD R, R */
+      src = AdrPart;
+      if (((dst>>4)&1) && ((src>>4)&1)) {
+        WrError(ErrNum_InvAddrMode);
+        return;
+      }
+      AppendIns(I_LD_R_R(dst, src));
       break;
     case ModIndReg: /* LD R, (R) */
+      src = AdrPart;
+      switch (OpSize) {
+      case eSymbolSizeUnknown:  AppendIns(I_LD_R_M(dst, src));  break;
+      case eSymbolSize8Bit:     AppendIns(I_LD_RB_M(dst, src)); break;
+      case eSymbolSize16Bit:    AppendIns(I_LD_RW_M(dst, src)); break;
+      default: WrError(ErrNum_InternalError); return;
+      }
       break;
     case ModImm:    /* LD R, imm */
+      switch (OpSize) {
+      case eSymbolSizeUnknown:  AppendIns(I_LD_R_I(dst)); break;
+      case eSymbolSize8Bit:
+        if (extend_sign)
+          AppendIns(I_LD_RB_SI(dst, AdrVals[0]));
+        else
+          AppendIns(I_LD_RB_I(dst, AdrVals[0]));
+        AdrCnt = 0;
+        break;
+      case eSymbolSize16Bit:
+        if (extend_sign)
+          AppendIns(I_LD_RW_SI(dst));
+        else
+          AppendIns(I_LD_RW_I(dst));
+        break;
+      default: WrError(ErrNum_InternalError); return;
+      }
+      AppendAdrVals();
       break;
     default:
       WrError(ErrNum_InvAddrMode);
+      break;
     }
     break;
   case ModIndReg:
     DecodeAdr(&ArgStr[2], MModReg);
     switch (AdrMode) {
     case ModReg:    /* LD (R), R */
+      src = AdrPart;
+      switch (OpSize) {
+      case eSymbolSizeUnknown:  AppendIns(I_LD_M_R(dst, src));  break;
+      case eSymbolSize8Bit:     AppendIns(I_LD_M_RB(dst, src)); break;
+      case eSymbolSize16Bit:    AppendIns(I_LD_M_RW(dst, src)); break;
+      default: WrError(ErrNum_InternalError); return;
+      }
       break;
     default:
       WrError(ErrNum_InvAddrMode);
+      return;
     }
     break;
   default:
     WrError(ErrNum_InvAddrMode);
-    break;
+    return;
   }
 }
 
 static void DecodeALU(Word Code)
 {
-  if (!ChkArgCnt(3, 3))
-    return;
-
-  DecodeAdr(&ArgStr[1], MModReg);
-  if (AdrMode != ModReg) {
-    return;
-  }
-  DecodeAdr(&ArgStr[2], MModReg);
-  if (AdrMode != ModReg) {
-    return;
-  }
-  DecodeAdr(&ArgStr[3], MModReg);
-  if (AdrMode != ModReg) {
-    return;
-  }
-
-  CodeLen = PrefixCnt;
-  BAsmCode[CodeLen++] = 0xff;  // TODO
-  BAsmCode[CodeLen++] = 0xff;
-}
-
-static void DecodeADD(Word Index)
-{
-  UNUSED(Index);
+  reg_num_t dst, ra, rb;
+  Byte imm;
 
   if (ArgCnt == 2) {
     DecodeAdr(&ArgStr[1], MModReg);
@@ -734,6 +763,8 @@ static void DecodeADD(Word Index)
       WrError(ErrNum_InvAddrMode);
       return;
     }
+    dst = AdrPart;
+
     OpSize = eSymbolSize8Bit;
     DecodeAdr(&ArgStr[2], MModImm);
     if (AdrMode != ModImm) {
@@ -742,120 +773,84 @@ static void DecodeADD(Word Index)
       }
       return;
     }
+    imm = AdrVals[0];
 
-    // TODO
-    BAsmCode[CodeLen++] = 0xff;
+    switch (Code) {
+    case 0: I_ADD_R_I(dst, imm);    break;
+    case 1: I_SUB_R_I(dst, imm);    break;
+    default: WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[2]); return;
+    }
+    return;
+  }
 
-  } else
-  if (ArgCnt == 3) {
-    DecodeALU(Index);
-  } else {
-    ChkArgCnt(2, 2);
+  if (!ChkArgCnt(3, 3))
+      return;
+
+  DecodeAdr(&ArgStr[1], MModReg);
+  if (AdrMode != ModReg) return;
+  dst = AdrPart;
+
+  DecodeAdr(&ArgStr[2], MModReg);
+  if (AdrMode != ModReg) return;
+  ra = AdrPart;
+
+  DecodeAdr(&ArgStr[3], MModReg);
+  if (AdrMode != ModReg) return;
+  rb = AdrPart;
+
+  switch (Code) {
+  case 0: AppendIns(I_ADD(dst, ra, rb));    break;
+  case 1: AppendIns(I_SUB(dst, ra, rb));    break;
+  case 2: AppendIns(I_MUL(dst, ra, rb));    break;
+  case 3: AppendIns(I_DIV(dst, ra, rb));    break;
+  case 4: AppendIns(I_AND(dst, ra, rb));    break;
+  case 5: AppendIns(I_OR (dst, ra, rb));    break;
+  case 6: AppendIns(I_XOR(dst, ra, rb));    break;
+  case 7: AppendIns(I_CP (dst, ra, rb));    break;
+  default: WrError(ErrNum_InternalError); return;
   }
 }
 
 static void DecodeShift(Word Code)
 {
-  Byte reg_num = 0;
-  int mem_arg_index;
+  reg_num_t reg_num = 0;
+  Byte imm;
 
   if (!ChkArgCnt(1, 1))
     return;
 
-  mem_arg_index = 1;
+  OpSize = eSymbolSizeUnknown;
+  DecodeAdr(&ArgStr[1], MModReg);
+  if (AdrMode != ModReg) return;
+  reg_num = AdrPart;
 
-  /* now decode the 'official argument': */
+  OpSize = eSymbolSize8Bit;
+  DecodeAdr(&ArgStr[1], MModImm);
+  if (AdrMode != ModImm) return;
+  imm = AdrVals[0];
 
-  OpSize = 0;
-  DecodeAdr(&ArgStr[mem_arg_index], MModReg);
-  if (AdrMode != ModReg)
-    return;
-
-  /* replace AdrPart for undocumented version.  Addressing mode must be IXd/IYd: */
-
-  if (ArgCnt >= 2)
-  {
-    if ((AdrPart != 6) || (PrefixCnt != 1))
-    {
-      WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[mem_arg_index]);
-      return;
-    }
-    AdrPart = reg_num;
+  switch (Code) {
+  case 0: AppendIns(I_SRA_R_I(reg_num, imm)); break;
+  case 1: AppendIns(I_SRL_R_I(reg_num, imm)); break;
+  case 2: AppendIns(I_SL_R_I (reg_num, imm)); break;
+  case 3: AppendIns(I_RLC_R_I(reg_num, imm)); break;
+  default: WrError(ErrNum_InternalError); return;
   }
-
-  /* assemble instruction: */
-
-  CodeLen = PrefixCnt;
-  BAsmCode[CodeLen++] = 0xcb;
-  AppendAdrVals();
-  BAsmCode[CodeLen++] = (Code << 3) | AdrPart;
-}
-
-static void DecodeBit(Word Code)
-{
-  Byte reg_num = 0;
-  int mem_arg_index, bit_arg_index;
-  Boolean ok;
-
-  /* extra undocumented dest register is not allowed for BIT */
-
-  if (!ChkArgCnt(1, (Code != 0) ? 3 : 2))
-    return;
-
-  mem_arg_index = 2;
-  bit_arg_index = 1;
-
-  /* now decode the 'official arguments': */
-
-  OpSize = 0;
-  DecodeAdr(&ArgStr[mem_arg_index], MModReg);
-  if (AdrMode != ModReg)
-    return;
-
-  /* forbid IXL..IYU: */
-
-  if ((PrefixCnt > 0) && (AdrPart != 6))
-  {
-    WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[mem_arg_index]);
-    return;
-  }
-
-  /* parse bit # and form machine code: */
-
-  Code = ((Code + 1) << 6) | (EvalStrIntExpression(&ArgStr[bit_arg_index], UInt3, &ok) << 3);
-  if (!ok)
-    return;
-
-  /* replace AdrPart for undocumented version.  Addressing mode must be IXd/IYd: */
-
-  if (ArgCnt >= 3)
-  {
-    if ((AdrPart != 6) || (PrefixCnt != 1))
-    {
-      WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[mem_arg_index]);
-      return;
-    }
-    AdrPart = reg_num;
-  }
-
-  /* assemble instruction: */
-
-  CodeLen = PrefixCnt;
-  BAsmCode[CodeLen++] = 0xcb;
-  AppendAdrVals();
-  BAsmCode[CodeLen++] = Code | AdrPart;
 }
 
 /*!------------------------------------------------------------------------
  * \fn     DecodePUSH_POP(Word Code)
  * \brief  handle PUSH/POP instructions
- * \param  Code machine code (4 = PUSH family, 0 = POP family)
+ * \param  Code 0 = PUSH, 1 = POP
  * ------------------------------------------------------------------------ */
 
 static void DecodePUSH_POP(Word Code)
 {
+  reg_num_t reg_num = 0;
+
   if (!ChkArgCnt(1, 1))
     return;
+
   DecodeAdr(&ArgStr[1], MModReg);
   if (AdrMode != ModReg) {
     if (AdrMode != ModNone) {
@@ -863,35 +858,40 @@ static void DecodePUSH_POP(Word Code)
     }
     return;
   }
+  reg_num = AdrPart;
 
-  // TODO
-  CodeLen = PrefixCnt;
-  BAsmCode[CodeLen++] = 0xfd;
-  BAsmCode[CodeLen++] = 0xf5;
+  if (Code == 0) {
+    AppendIns(I_PUSH_R(reg_num));
+  } else
+  if (Code == 1) {
+    AppendIns(I_POP_R(reg_num));
+  } else {
+    WrError(ErrNum_InternalError);
+  }
 }
 
-static void DecodeIN_OUT(Word BusCmd)
+static void DecodeIN_OUT(Word bus_cmd)
 {
+  reg_num_t port_reg_num;
+  reg_num_t reg_num;
+
   if (!ChkArgCnt(2, 2))
     return;
 
-  const tStrComp *pPortArg = (BusCmd & 0x1) ? &ArgStr[2] : &ArgStr[1];
-  const tStrComp *pRegArg =  (BusCmd & 0x1) ? &ArgStr[1] : &ArgStr[2];
+  const tStrComp *pPortArg = (bus_cmd & 0x1) ? &ArgStr[2] : &ArgStr[1];
+  const tStrComp *pRegArg =  (bus_cmd & 0x1) ? &ArgStr[1] : &ArgStr[2];
 
-  OpSize = 0;
+  OpSize = eSymbolSizeUnknown;
+
   DecodeAdr(pPortArg, MModIndReg);
-  if (AdrMode != ModIndReg) {
-    return;
-  }
-  DecodeAdr(pRegArg, MModReg);
-  if (AdrMode != ModReg) {
-    return;
-  }
+  if (AdrMode != ModIndReg) return;
+  port_reg_num = AdrPart;
 
-  // TODO
-  CodeLen = 2;
-  BAsmCode[0] = 0xed;
-  BAsmCode[1] = 0x40 + (AdrPart << 3);
+  DecodeAdr(pRegArg, MModReg);
+  if (AdrMode != ModReg) return;
+  reg_num = AdrPart;
+
+  AppendIns(I_BUS_ACCESS(bus_cmd, bus_num_io, reg_num, port_reg_num));
 }
 
 static void DecodeRET(Word Code)
@@ -900,17 +900,29 @@ static void DecodeRET(Word Code)
 
   UNUSED(Code);
 
-  if (ArgCnt == 0)
-  {
-    CodeLen = PrefixCnt + 1;
-    BAsmCode[PrefixCnt] = 0xc9;
+  if (!ChkArgCnt(0, 1))
+    return;
+
+  /*
+   * unconditinal return
+   */
+  if (ArgCnt == 0) {
+    AppendIns(I_RET());
+    return;
   }
-  else if (!ChkArgCnt(0, 1));
-  else if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-  else
-  {
-    CodeLen = PrefixCnt + 1;
-    BAsmCode[PrefixCnt] = 0xc0 + (Cond << 3);
+
+  /*
+   * conditinal return
+   */
+  if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
+    WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
+    return;
+  }
+
+  if (Cond & reg_flag_not) {
+    AppendIns(I_RET_N_(Cond & ~reg_flag_not));
+  } else {
+    AppendIns(I_RET_(Cond));
   }
 }
 
@@ -930,101 +942,82 @@ static IntType get_jr_dist(LongWord dest, LongInt *p_dist)
 
 static void DecodeJP(Word Code)
 {
+  reg_num_t r;
   int Cond;
 
   UNUSED(Code);
 
-  switch (ArgCnt)
-  {
-    case 1:
-      Cond = 1;
-      break;
-    case 2:
-      if (!DecodeCondition(ArgStr[1].str.p_str, &Cond))
-      {
-        WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-        return;
-      }
-      Cond <<= 3;
-      break;
-    default:
-      (void)ChkArgCnt(1, 2);
+  switch (ArgCnt) {
+  case 1:
+    Cond = reg_flag_none;
+    break;
+  case 2:
+    if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
+      WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
       return;
-  }
-
-  DecodeAdr(&ArgStr[ArgCnt], MModIndReg);
-  if (AdrMode != ModIndReg) {
+    }
+    break;
+  default:
+    (void)ChkArgCnt(1, 2);
     return;
   }
 
-  // TODO
+  DecodeAdr(&ArgStr[ArgCnt], MModIndReg);
+  if (AdrMode != ModIndReg) return;
+  r = AdrPart;
+
+  if (Cond == reg_flag_none) {
+    AppendIns(I_JP_R(r));
+  } else
+  if (Cond & reg_flag_not) {
+    AppendIns(I_JP_N_(Cond & ~reg_flag_not, r));
+  } else {
+    AppendIns(I_JP_(Cond, r));
+  }
 }
 
 static void DecodeCALL(Word Code)
 {
-  Boolean OK;
-  int Condition;
+  reg_num_t r;
+  int Cond;
 
   UNUSED(Code);
 
-  switch (ArgCnt)
-  {
-    case 1:
-      Condition = 9;
-      OK = True;
-      break;
-    case 2:
-      OK = DecodeCondition(ArgStr[1].str.p_str, &Condition);
-      if (OK)
-        Condition <<= 3;
-      else
-        WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-      break;
-    default:
-      (void)ChkArgCnt(1, 2);
-      OK = False;
+  switch (ArgCnt) {
+  case 1:
+    Cond = reg_flag_none;
+    break;
+  case 2:
+    if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
+      WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
+      return;
+    }
+    break;
+  default:
+    (void)ChkArgCnt(1, 2);
+    return;
   }
 
-  if (OK)
-  {
-    LongWord AdrLong;
-    tEvalResult EvalResult;
+  DecodeAdr(&ArgStr[ArgCnt], MModIndReg);
+  if (AdrMode != ModIndReg) return;
+  r = AdrPart;
 
-    AdrLong = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
-    if (EvalResult.OK)
-    {
-      if (AdrLong > 0xfffffful)
-      {
-        ChangeDDPrefix(ePrefixIW);
-        CodeLen = PrefixCnt;
-        BAsmCode[CodeLen++] = 0xc4 + Condition;
-        BAsmCode[CodeLen++] = Lo(AdrLong);
-        BAsmCode[CodeLen++] = Hi(AdrLong);
-        BAsmCode[CodeLen++] = Hi(AdrLong >> 8);
-        BAsmCode[CodeLen++] = Hi(AdrLong >> 16);
-      }
-      else if (AdrLong > 0xfffful)
-      {
-        ChangeDDPrefix(ePrefixIB);
-        CodeLen = PrefixCnt;
-        BAsmCode[CodeLen++] = 0xc4 + Condition;
-        BAsmCode[CodeLen++] = Lo(AdrLong);
-        BAsmCode[CodeLen++] = Hi(AdrLong);
-        BAsmCode[CodeLen++] = Hi(AdrLong >> 8);
-      }
-      else
-      {
-        CodeLen = PrefixCnt;
-        BAsmCode[CodeLen++] = 0xc4 + Condition;
-        BAsmCode[CodeLen++] = Lo(AdrLong);
-        BAsmCode[CodeLen++] = Hi(AdrLong);
-      }
-    }
+  if (Cond == reg_flag_none) {
+    AppendIns(I_CALL_R(r));
+  } else
+  if (Cond & reg_flag_not) {
+    AppendIns(I_CALL_N_(Cond & ~reg_flag_not, r));
+  } else {
+    AppendIns(I_CALL_(Cond, r));
   }
 }
 
 static void encode_jr_core(IntType dist_size, Byte condition, LongInt dist)
 {
+  // TODO
+  WrError(ErrNum_InternalError);
+  return;
+  /*
   switch (dist_size)
   {
     case SInt8:
@@ -1050,12 +1043,14 @@ static void encode_jr_core(IntType dist_size, Byte condition, LongInt dist)
     default:
       break;
   }
+  */
 }
 
 static void DecodeJR(Word Code)
 {
-  Boolean OK;
-  int Condition;
+  reg_num_t r;
+  int Cond;
+
   LongWord dest;
   tEvalResult EvalResult;
   LongInt dist;
@@ -1063,93 +1058,113 @@ static void DecodeJR(Word Code)
 
   UNUSED(Code);
 
-  switch (ArgCnt)
-  {
-    case 1:
-      Condition = 3;
-      OK = True;
-      break;
-    case 2:
-      OK = DecodeCondition(ArgStr[1].str.p_str, &Condition);
-      if (OK && (Condition > 3))
-        OK = False;
-      if (OK)
-        Condition += 4;
-      else
-        WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-      break;
-    default:
-      (void)ChkArgCnt(1, 2);
-      OK = False;
-  }
-  if (!OK)
-    return;
-
-  dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
-  if (!EvalResult.OK)
-    return;
-
-  dist_type = get_jr_dist(dest, &dist);
-  if (dist_type == UInt0)
-  {
-    if (mFirstPassUnknownOrQuestionable(EvalResult.Flags))
-      dist_type = SInt24;
-    else
-    {
-      WrStrErrorPos(ErrNum_JmpDistTooBig, &ArgStr[ArgCnt]);
+  switch (ArgCnt) {
+  case 1:
+    Cond = reg_flag_none;
+    break;
+  case 2:
+    if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
+      WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
       return;
     }
+    break;
+  default:
+    (void)ChkArgCnt(1, 2);
+    return;
   }
 
-  encode_jr_core(dist_type, Condition, dist);
+  OpSize = eSymbolSizeUnknown;
+  DecodeAdr(&ArgStr[ArgCnt], MModIndReg | MModImm);
+  switch (AdrMode) {
+  case ModIndReg:
+    r = AdrPart;
+    if (Cond == reg_flag_none) {
+      AppendIns(I_JR_R(r));
+    } else
+    if (Cond & reg_flag_not) {
+      AppendIns(I_JR_N_(Cond & ~reg_flag_not, r));
+    } else {
+      AppendIns(I_JR_(Cond, r));
+   }
+  case ModImm:
+    dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
+    if (!EvalResult.OK)
+      return;
+
+    dist_type = get_jr_dist(dest, &dist);
+    if (dist_type == UInt0) {
+      if (mFirstPassUnknownOrQuestionable(EvalResult.Flags)) {
+        dist_type = SInt24;
+      } else {
+        WrStrErrorPos(ErrNum_JmpDistTooBig, &ArgStr[ArgCnt]);
+        return;
+      }
+    }
+    encode_jr_core(dist_type, Cond, dist);
+    break;
+  default:
+    WrError(ErrNum_InvAddrMode);
+    break;
+  }
 }
 
 static void DecodeDJNZ(Word Code)
 {
+  reg_num_t ra, rb;
+  LongWord dest;
+  tEvalResult EvalResult;
+  LongInt dist;
+  IntType dist_type;
+
   UNUSED(Code);
 
-  if (ChkArgCnt(1, 1))
-  {
-    tEvalResult EvalResult;
-    LongInt AdrLInt;
+  if (!ChkArgCnt(2, 2))
+    return;
 
-    AdrLInt = EvalAbsAdrExpression(&ArgStr[1], &EvalResult);
-    if (EvalResult.OK)
-    {
-      AdrLInt -= EProgCounter() + 2;
-      if ((AdrLInt <= 0x7fl) & (AdrLInt >= -0x80l))
-      {
-        CodeLen = 2;
-        BAsmCode[0] = 0x10;
-        BAsmCode[1] = Lo(AdrLInt);
-      }
-      else
-      {
-        AdrLInt -= 2;
-        if ((AdrLInt <= 0x7fffl) && (AdrLInt >= -0x8000l))
-        {
-          CodeLen = 4;
-          BAsmCode[0] = 0xdd;
-          BAsmCode[1] = 0x10;
-          BAsmCode[2] = AdrLInt & 0xff;
-          BAsmCode[3] = (AdrLInt >> 8) & 0xff;
-        }
-        else
-        {
-          AdrLInt--;
-          if ((AdrLInt <= 0x7fffffl) && (AdrLInt >= -0x800000l))
-          {
-            CodeLen = 5;
-            BAsmCode[0] = 0xfd;
-            BAsmCode[1] = 0x10;
-            BAsmCode[2] = AdrLInt & 0xff;
-            BAsmCode[3] = (AdrLInt >> 8) & 0xff;
-            BAsmCode[4] = (AdrLInt >> 16) & 0xff;
-          }
-          else WrError(ErrNum_JmpDistTooBig);
-        }
+  DecodeAdr(&ArgStr[1], MModIndReg);
+  if (AdrMode != ModReg) return;
+  ra = AdrPart;
+
+  OpSize = eSymbolSizeUnknown;
+  DecodeAdr(&ArgStr[2], MModIndReg | MModImm);
+  switch (AdrMode) {
+  case ModIndReg:
+    rb = AdrPart;
+    AppendIns(I_DJNZ(ra, rb));
+  case ModImm:
+    dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
+    if (!EvalResult.OK)
+      return;
+
+    dist_type = get_jr_dist(dest, &dist);
+    if (dist_type == UInt0) {
+      if (mFirstPassUnknownOrQuestionable(EvalResult.Flags)) {
+        dist_type = SInt24;
+      } else {
+        WrStrErrorPos(ErrNum_JmpDistTooBig, &ArgStr[ArgCnt]);
+        return;
       }
     }
+
+    // TODO
+    WrError(ErrNum_InternalError);
+    return;
+    /*
+    switch (dist_size) {
+    case SInt8:
+      break;
+    case SInt16:
+      break;
+    case SInt24:
+      break;
+    default:
+      break;
+    }
+    */
+    break;
+  default:
+    WrError(ErrNum_InvAddrMode);
+    break;
   }
 }
 
@@ -1157,82 +1172,34 @@ static void DecodeRST(Word Code)
 {
   UNUSED(Code);
 
-  if (ChkArgCnt(1, 1))
-  {
-    Boolean OK;
-    tSymbolFlags Flags;
-    Byte AdrByte;
-    int SaveRadixBase = RadixBase;
+  if (!ChkArgCnt(1, 1))
+      return;
+
+  Boolean OK;
+  tSymbolFlags Flags;
+  Byte AdrByte;
+  int SaveRadixBase = RadixBase;
 
 #if 0
-    /* some people like to regard the RST argument as a literal
-       and leave away the 'h' to mark 38 as a hex number... */
-    RadixBase = 16;
+  /* some people like to regard the RST argument as a literal
+     and leave away the 'h' to mark 38 as a hex number... */
+  RadixBase = 16;
 #endif
 
-    AdrByte = EvalStrIntExpressionWithFlags(&ArgStr[1], Int8, &OK, &Flags);
-    RadixBase = SaveRadixBase;
+  AdrByte = EvalStrIntExpressionWithFlags(&ArgStr[1], Int8, &OK, &Flags);
+  RadixBase = SaveRadixBase;
 
-    if (mFirstPassUnknown(Flags))
-      AdrByte = AdrByte & 0x38;
-    if (OK)
-    {
-      if ((AdrByte > 0x38) || (AdrByte & 7)) WrError(ErrNum_NotFromThisAddress);
-      else
-      {
-        CodeLen = PrefixCnt + 1;
-        BAsmCode[PrefixCnt] = 0xc7 + AdrByte;
-      }
-    }
+  if (mFirstPassUnknown(Flags))
+    AdrByte = AdrByte & 0x38;
+  if (!OK)
+    return;
+
+  if ((AdrByte > 0x38) || (AdrByte & 7)) {
+    WrError(ErrNum_NotFromThisAddress);
+    return;
   }
-}
 
-static void DecodeEI_DI(Word Code)
-{
-  if (ArgCnt == 0)
-  {
-    BAsmCode[0] = 0xf3 + Code;
-    CodeLen = 1;
-  }
-  else if (ChkArgCnt(1, 1))
-  {
-    Boolean OK;
-
-    BAsmCode[2] = EvalStrIntExpression(&ArgStr[1], UInt8, &OK);
-    if (OK)
-    {
-      BAsmCode[0] = 0xdd;
-      BAsmCode[1] = 0xf3 + Code;
-      CodeLen = 3;
-    }
-  }
-}
-
-static void DecodeIM(Word Code)
-{
-  UNUSED(Code);
-
-  if (ChkArgCnt(1, 1))
-  {
-    Byte AdrByte;
-    Boolean OK;
-
-    AdrByte = EvalStrIntExpression(&ArgStr[1], UInt2, &OK);
-    if (OK)
-    {
-      if (AdrByte > 3) WrError(ErrNum_OverRange);
-      else
-      {
-        if (AdrByte == 3)
-          AdrByte = 1;
-        else if (AdrByte >= 1)
-          AdrByte++;
-        CodeLen = 2;
-        BAsmCode[0] = 0xed;
-        BAsmCode[1] = 0x46 + (AdrByte << 3);
-      }
-    }
-  }
+  I_RST_N(AdrByte);
 }
 
 static void ModIntel(Word Code)
@@ -1259,11 +1226,6 @@ static void AddFixed(const char *NewName, cpu_core_mask_t core_mask, Word NewCod
   AddInstTable(InstTable, NewName, InstrZ++, DecodeFixed);
 }
 
-static void AddBit(const char *NName, Word Code)
-{
-  AddInstTable(InstTable, NName, Code, DecodeBit);
-}
-
 static void AddCondition(const char *NewName, Byte NewCode)
 {
   order_array_rsv_end(Conditions, Condition);
@@ -1278,9 +1240,10 @@ static void InitFields(void)
   AddInstTable(InstTable, "LD" ,  0, DecodeLD);
   AddInstTable(InstTable, "LD.B", 1, DecodeLD);
   AddInstTable(InstTable, "LD.W", 2, DecodeLD);
-  AddInstTable(InstTable, "ADD", 0, DecodeADD);
-  AddInstTable(InstTable, "PUSH", 4, DecodePUSH_POP);
-  AddInstTable(InstTable, "POP" , 0, DecodePUSH_POP);
+  AddInstTable(InstTable, "LD.SB",3, DecodeLD);
+  AddInstTable(InstTable, "LD.SW",4, DecodeLD);
+  AddInstTable(InstTable, "PUSH", 0, DecodePUSH_POP);
+  AddInstTable(InstTable, "POP" , 1, DecodePUSH_POP);
   AddInstTable(InstTable, "IN"  , bus_cmd_read, DecodeIN_OUT);
   AddInstTable(InstTable, "IN.B", bus_cmd_read_b, DecodeIN_OUT);
   AddInstTable(InstTable, "IN.W", bus_cmd_read_w, DecodeIN_OUT);
@@ -1293,59 +1256,50 @@ static void InitFields(void)
   AddInstTable(InstTable, "JR" , 0, DecodeJR);
   AddInstTable(InstTable, "DJNZ", 0, DecodeDJNZ);
   AddInstTable(InstTable, "RST", 0, DecodeRST);
-  AddInstTable(InstTable, "DI", 0, DecodeEI_DI);
-  AddInstTable(InstTable, "EI", 8, DecodeEI_DI);
-  AddInstTable(InstTable, "IM", 0, DecodeIM);
   AddInstTable(InstTable, "DEFM", 0, ModIntel);
   AddInstTable(InstTable, "DEFB", 0, ModIntel);
   AddInstTable(InstTable, "DEFW", 0, ModIntel);
 
+  AddInstTable(InstTable, "ADD", 0, DecodeALU);
+  AddInstTable(InstTable, "SUB", 1, DecodeALU);
+  AddInstTable(InstTable, "MUL", 2, DecodeALU);
+  AddInstTable(InstTable, "DIV", 3, DecodeALU);
+  AddInstTable(InstTable, "AND", 4, DecodeALU);
+  AddInstTable(InstTable, "OR",  5, DecodeALU);
+  AddInstTable(InstTable, "XOR", 6, DecodeALU);
+  AddInstTable(InstTable, "CP",  7, DecodeALU);
+
+  AddInstTable(InstTable, "SRA", 0, DecodeShift);
+  AddInstTable(InstTable, "SRL", 1, DecodeShift);
+  AddInstTable(InstTable, "SL",  2, DecodeShift);
+  AddInstTable(InstTable, "RLC", 3, DecodeShift);
+
+  AddInstTable(InstTable, "REG", 0, CodeREG);
+
   InstrZ = 0;
-  AddCondition("NZ", 0);
-  AddCondition("Z" , 1);
-  AddCondition("NC", 2);
-  AddCondition("C" , 3);
-  AddCondition("PO", 4);
-  AddCondition("NV", 4);
-  AddCondition("PE", 5);
-  AddCondition("V" , 5);
-  AddCondition("P" , 6);
-  AddCondition("NS", 6);
-  AddCondition("M" , 7);
-  AddCondition("S" , 7);
+  AddCondition("NZ", reg_flag_zero | reg_flag_not);
+  AddCondition("Z" , reg_flag_zero);
+  AddCondition("NC", reg_flag_carry | reg_flag_not);
+  AddCondition("C" , reg_flag_carry);
+  AddCondition("PO", reg_flag_parity | reg_flag_not);
+  AddCondition("NV", reg_flag_overflow | reg_flag_not);
+  AddCondition("PE", reg_flag_parity);
+  AddCondition("V" , reg_flag_overflow);
+  AddCondition("P" , reg_flag_sign | reg_flag_not);
+  AddCondition("NS", reg_flag_sign | reg_flag_not);
+  AddCondition("M" , reg_flag_sign);
+  AddCondition("S" , reg_flag_sign);
   AddCondition(NULL, 0);
 
   InstrZ = 0;
-  AddFixed("NOP"   , e_core_mask_all       , 0x0000);
-  AddFixed("HALT"  , e_core_mask_all       , 0x0076);
-
-  AddInstTable(InstTable, "SUB", 0, DecodeALU);
-  AddInstTable(InstTable, "AND", 0, DecodeALU);
-  AddInstTable(InstTable, "OR",  0, DecodeALU);
-  AddInstTable(InstTable, "XOR", 0, DecodeALU);
-  AddInstTable(InstTable, "CP",  0, DecodeALU);
-
-  AddInstTable(InstTable, "RLC",  0, DecodeShift);
-  AddInstTable(InstTable, "RRC",  1, DecodeShift);
-  AddInstTable(InstTable, "RL",   2, DecodeShift);
-  AddInstTable(InstTable, "RR",   3, DecodeShift);
-  AddInstTable(InstTable, "SLA",  4, DecodeShift);
-  AddInstTable(InstTable, "SRA",  5, DecodeShift);
-  AddInstTable(InstTable, "SRL",  7, DecodeShift);
-
-  AddBit("BIT", 0);
-  AddBit("RES", 1);
-  AddBit("SET", 2);
-
-  AddInstTable(InstTable, "REG" , 0, CodeREG);
+  AddFixed("NOP"   , e_core_mask_all    , I_NOP());
+  AddFixed("HALT"  , e_core_mask_all    , I_HALT());
 }
 
 static void DeinitFields(void)
 {
   order_array_free(Conditions);
   order_array_free(FixedOrders);
-  order_array_free(AccOrders);
-  order_array_free(HLOrders);
 
   DestroyInstTable(InstTable);
 }
@@ -1356,9 +1310,7 @@ static void MakeCode_Z80(void)
 {
   CodeLen = 0;
   DontPrint = False;
-  PrefixCnt = 0;
-  OpSize = 0xff;
-  MayLW = False;
+  OpSize = eSymbolSizeUnknown;
 
   /* To Be Ignored: */
 
