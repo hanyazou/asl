@@ -380,6 +380,46 @@ static ins_t I_CP (reg_num_t dst, reg_num_t ra, reg_num_t rb) {
   return 0xf000 | (dst<<8) | (ra<<4) | rb;
 }
 
+enum {
+  G_NOP,
+  G_HALT,
+  G_RET,
+  G_LD,
+  G_LD_B,
+  G_LD_W,
+  G_LD_SB,
+  G_LD_SW,
+  G_PUSH,
+  G_POP,
+  G_EXTN,
+  G_CPL,
+  G_NEG,
+  G_INVF,
+  G_SETF,
+  G_CLRF,
+  G_TESTF,
+  G_CALL,
+  G_RST,
+  G_JP,
+  G_JR,
+  G_SRA,
+  G_SRL,
+  G_SL,
+  G_RLC,
+  G_DJNZ,
+  G_EX,
+  G_OUT,
+  G_IN,
+  G_ADD,
+  G_SUB,
+  G_MUL,
+  G_DIV,
+  G_AND,
+  G_OR,
+  G_XOR,
+  G_CP,
+};
+
 /*!------------------------------------------------------------------------
  * \fn     EvalAbsAdrExpression(const tStrComp *pArg, tEvalResult *pEvalResult)
  * \brief  evaluate absolute address, range is targent-dependant
@@ -671,11 +711,11 @@ static void DecodeLD(Word size)
       return;
 
   switch (size) {
-  case 0: OpSize = eSymbolSizeUnknown; extend_sign = False; break;
-  case 1: OpSize = eSymbolSize8Bit;    extend_sign = False; break;
-  case 2: OpSize = eSymbolSize16Bit;   extend_sign = False; break;
-  case 3: OpSize = eSymbolSize8Bit;    extend_sign = True; break;
-  case 4: OpSize = eSymbolSize16Bit;   extend_sign = True; break;
+  case G_LD:    OpSize = eSymbolSizeUnknown; extend_sign = False; break;
+  case G_LD_B:  OpSize = eSymbolSize8Bit;    extend_sign = False; break;
+  case G_LD_W:  OpSize = eSymbolSize16Bit;   extend_sign = False; break;
+  case G_LD_SB: OpSize = eSymbolSize8Bit;    extend_sign = True; break;
+  case G_LD_SW: OpSize = eSymbolSize16Bit;   extend_sign = True; break;
   default:
     WrError(ErrNum_InternalError);
     return;
@@ -776,8 +816,8 @@ static void DecodeALU(Word Code)
     imm = AdrVals[0];
 
     switch (Code) {
-    case 0: I_ADD_R_I(dst, imm);    break;
-    case 1: I_SUB_R_I(dst, imm);    break;
+    case G_ADD: I_ADD_R_I(dst, imm);    break;
+    case G_SUB: I_SUB_R_I(dst, imm);    break;
     default: WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[2]); return;
     }
     return;
@@ -799,14 +839,14 @@ static void DecodeALU(Word Code)
   rb = AdrPart;
 
   switch (Code) {
-  case 0: AppendIns(I_ADD(dst, ra, rb));    break;
-  case 1: AppendIns(I_SUB(dst, ra, rb));    break;
-  case 2: AppendIns(I_MUL(dst, ra, rb));    break;
-  case 3: AppendIns(I_DIV(dst, ra, rb));    break;
-  case 4: AppendIns(I_AND(dst, ra, rb));    break;
-  case 5: AppendIns(I_OR (dst, ra, rb));    break;
-  case 6: AppendIns(I_XOR(dst, ra, rb));    break;
-  case 7: AppendIns(I_CP (dst, ra, rb));    break;
+  case G_ADD: AppendIns(I_ADD(dst, ra, rb));    break;
+  case G_SUB: AppendIns(I_SUB(dst, ra, rb));    break;
+  case G_MUL: AppendIns(I_MUL(dst, ra, rb));    break;
+  case G_DIV: AppendIns(I_DIV(dst, ra, rb));    break;
+  case G_AND: AppendIns(I_AND(dst, ra, rb));    break;
+  case G_OR:  AppendIns(I_OR (dst, ra, rb));    break;
+  case G_XOR: AppendIns(I_XOR(dst, ra, rb));    break;
+  case G_CP:  AppendIns(I_CP (dst, ra, rb));    break;
   default: WrError(ErrNum_InternalError); return;
   }
 }
@@ -830,10 +870,10 @@ static void DecodeShift(Word Code)
   imm = AdrVals[0];
 
   switch (Code) {
-  case 0: AppendIns(I_SRA_R_I(reg_num, imm)); break;
-  case 1: AppendIns(I_SRL_R_I(reg_num, imm)); break;
-  case 2: AppendIns(I_SL_R_I (reg_num, imm)); break;
-  case 3: AppendIns(I_RLC_R_I(reg_num, imm)); break;
+  case G_SRA: AppendIns(I_SRA_R_I(reg_num, imm)); break;
+  case G_SRL: AppendIns(I_SRL_R_I(reg_num, imm)); break;
+  case G_SL:  AppendIns(I_SL_R_I (reg_num, imm)); break;
+  case G_RLC: AppendIns(I_RLC_R_I(reg_num, imm)); break;
   default: WrError(ErrNum_InternalError); return;
   }
 }
@@ -860,10 +900,10 @@ static void DecodePUSH_POP(Word Code)
   }
   reg_num = AdrPart;
 
-  if (Code == 0) {
+  if (Code == G_PUSH) {
     AppendIns(I_PUSH_R(reg_num));
   } else
-  if (Code == 1) {
+  if (Code == G_POP) {
     AppendIns(I_POP_R(reg_num));
   } else {
     WrError(ErrNum_InternalError);
@@ -1237,56 +1277,56 @@ static void InitFields(void)
 {
   InstTable = CreateInstTable(203);
 
-  AddInstTable(InstTable, "LD" ,  0, DecodeLD);
-  AddInstTable(InstTable, "LD.B", 1, DecodeLD);
-  AddInstTable(InstTable, "LD.W", 2, DecodeLD);
-  AddInstTable(InstTable, "LD.SB",3, DecodeLD);
-  AddInstTable(InstTable, "LD.SW",4, DecodeLD);
-  AddInstTable(InstTable, "PUSH", 0, DecodePUSH_POP);
-  AddInstTable(InstTable, "POP" , 1, DecodePUSH_POP);
-  AddInstTable(InstTable, "IN"  , bus_cmd_read, DecodeIN_OUT);
-  AddInstTable(InstTable, "IN.B", bus_cmd_read_b, DecodeIN_OUT);
-  AddInstTable(InstTable, "IN.W", bus_cmd_read_w, DecodeIN_OUT);
-  AddInstTable(InstTable, "OUT" , bus_cmd_write, DecodeIN_OUT);
-  AddInstTable(InstTable, "OUT.B", bus_cmd_write_b, DecodeIN_OUT);
-  AddInstTable(InstTable, "OUT.W", bus_cmd_write_w, DecodeIN_OUT);
-  AddInstTable(InstTable, "RET" , 0, DecodeRET);
-  AddInstTable(InstTable, "JP" , 0, DecodeJP);
-  AddInstTable(InstTable, "CALL", 0, DecodeCALL);
-  AddInstTable(InstTable, "JR" , 0, DecodeJR);
-  AddInstTable(InstTable, "DJNZ", 0, DecodeDJNZ);
-  AddInstTable(InstTable, "RST", 0, DecodeRST);
-  AddInstTable(InstTable, "DEFM", 0, ModIntel);
-  AddInstTable(InstTable, "DEFB", 0, ModIntel);
-  AddInstTable(InstTable, "DEFW", 0, ModIntel);
+  AddInstTable(InstTable, "LD" ,    G_LD,               DecodeLD);
+  AddInstTable(InstTable, "LD.B",   G_LD_B,             DecodeLD);
+  AddInstTable(InstTable, "LD.W",   G_LD_W,             DecodeLD);
+  AddInstTable(InstTable, "LD.SB",  G_LD_SB,            DecodeLD);
+  AddInstTable(InstTable, "LD.SW",  G_LD_SW,            DecodeLD);
+  AddInstTable(InstTable, "PUSH",   G_PUSH,             DecodePUSH_POP);
+  AddInstTable(InstTable, "POP" ,   G_POP,              DecodePUSH_POP);
+  AddInstTable(InstTable, "IN"  ,   bus_cmd_read,       DecodeIN_OUT);
+  AddInstTable(InstTable, "IN.B",   bus_cmd_read_b,     DecodeIN_OUT);
+  AddInstTable(InstTable, "IN.W",   bus_cmd_read_w,     DecodeIN_OUT);
+  AddInstTable(InstTable, "OUT" ,   bus_cmd_write,      DecodeIN_OUT);
+  AddInstTable(InstTable, "OUT.B",  bus_cmd_write_b,    DecodeIN_OUT);
+  AddInstTable(InstTable, "OUT.W",  bus_cmd_write_w,    DecodeIN_OUT);
+  AddInstTable(InstTable, "RET" ,   G_RET,              DecodeRET);
+  AddInstTable(InstTable, "JP" ,    G_JP,               DecodeJP);
+  AddInstTable(InstTable, "CALL",   G_CALL,             DecodeCALL);
+  AddInstTable(InstTable, "JR" ,    G_JR,               DecodeJR);
+  AddInstTable(InstTable, "DJNZ",   G_DJNZ,             DecodeDJNZ);
+  AddInstTable(InstTable, "RST",    G_RST,              DecodeRST);
 
-  AddInstTable(InstTable, "ADD", 0, DecodeALU);
-  AddInstTable(InstTable, "SUB", 1, DecodeALU);
-  AddInstTable(InstTable, "MUL", 2, DecodeALU);
-  AddInstTable(InstTable, "DIV", 3, DecodeALU);
-  AddInstTable(InstTable, "AND", 4, DecodeALU);
-  AddInstTable(InstTable, "OR",  5, DecodeALU);
-  AddInstTable(InstTable, "XOR", 6, DecodeALU);
-  AddInstTable(InstTable, "CP",  7, DecodeALU);
+  AddInstTable(InstTable, "ADD",    G_ADD,              DecodeALU);
+  AddInstTable(InstTable, "SUB",    G_SUB,              DecodeALU);
+  AddInstTable(InstTable, "MUL",    G_MUL,              DecodeALU);
+  AddInstTable(InstTable, "DIV",    G_DIV,              DecodeALU);
+  AddInstTable(InstTable, "AND",    G_AND,              DecodeALU);
+  AddInstTable(InstTable, "OR",     G_OR,               DecodeALU);
+  AddInstTable(InstTable, "XOR",    G_XOR,              DecodeALU);
+  AddInstTable(InstTable, "CP",     G_CP,               DecodeALU);
 
-  AddInstTable(InstTable, "SRA", 0, DecodeShift);
-  AddInstTable(InstTable, "SRL", 1, DecodeShift);
-  AddInstTable(InstTable, "SL",  2, DecodeShift);
-  AddInstTable(InstTable, "RLC", 3, DecodeShift);
+  AddInstTable(InstTable, "SRA",    G_SRA,              DecodeShift);
+  AddInstTable(InstTable, "SRL",    G_SRL,              DecodeShift);
+  AddInstTable(InstTable, "SL",     G_SL,               DecodeShift);
+  AddInstTable(InstTable, "RLC",    G_RLC,              DecodeShift);
 
-  AddInstTable(InstTable, "REG", 0, CodeREG);
+  AddInstTable(InstTable, "REG",    0,                  CodeREG);
+  AddInstTable(InstTable, "DEFM",   0,                  ModIntel);
+  AddInstTable(InstTable, "DEFB",   0,                  ModIntel);
+  AddInstTable(InstTable, "DEFW",   0,                  ModIntel);
 
   InstrZ = 0;
-  AddCondition("NZ", reg_flag_zero | reg_flag_not);
+  AddCondition("NZ", reg_flag_zero      | reg_flag_not);
   AddCondition("Z" , reg_flag_zero);
-  AddCondition("NC", reg_flag_carry | reg_flag_not);
+  AddCondition("NC", reg_flag_carry     | reg_flag_not);
   AddCondition("C" , reg_flag_carry);
-  AddCondition("PO", reg_flag_parity | reg_flag_not);
-  AddCondition("NV", reg_flag_overflow | reg_flag_not);
+  AddCondition("PO", reg_flag_parity    | reg_flag_not);
+  AddCondition("NV", reg_flag_overflow  | reg_flag_not);
   AddCondition("PE", reg_flag_parity);
   AddCondition("V" , reg_flag_overflow);
-  AddCondition("P" , reg_flag_sign | reg_flag_not);
-  AddCondition("NS", reg_flag_sign | reg_flag_not);
+  AddCondition("P" , reg_flag_sign      | reg_flag_not);
+  AddCondition("NS", reg_flag_sign      | reg_flag_not);
   AddCondition("M" , reg_flag_sign);
   AddCondition("S" , reg_flag_sign);
   AddCondition(NULL, 0);
