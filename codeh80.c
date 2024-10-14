@@ -363,11 +363,11 @@ static ins_t I_INB (reg_num_t ra, reg_num_t rb) {
 //  move
 //
 static ins_t I_LD_R_R(reg_num_t rb, reg_num_t ra) {
-  if ((((ra>>4)&1) && ~((rb>>4)&1)) || (~((ra>>4)&1) && ~((rb>>4)&1)))
+  if ((((ra>>4)&1) && !((rb>>4)&1)) || (!((ra>>4)&1) && !((rb>>4)&1)))
     //  3 110a_aaaa_bbbb  move reg[A] to reg[B]
     return 0x3c00 | (ra<<4) | rb;
   else
-  if (~((ra>>4)&1) && ((rb>>4)&1))
+  if (!((ra>>4)&1) && ((rb>>4)&1))
     //  3 111a_aaaa_bbbb  move reg[B] to reg[A]
     return 0x3e00 | (rb<<4) | ra;
   else
@@ -1372,7 +1372,7 @@ static void DecodeRST(Word Code)
     return;
   }
 
-  I_RST_N(AdrByte);
+  AppendIns(I_RST_N(AdrByte));
 }
 
 static void ModIntel(Word Code)
