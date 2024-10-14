@@ -34,6 +34,8 @@
 
 #include "codeh80.h"
 
+// #define DEBUG 1
+
 typedef enum
 {
   e_core_h80,
@@ -92,6 +94,20 @@ typedef struct {
   const char *Name;
   Byte Code;
 } Condition;
+
+/*-------------------------------------------------------------------------*/
+/* debug */
+
+#if !defined(DEBUG)
+#define DEBUG 0
+#endif
+
+#define dprint(fmt, ...) \
+  do { \
+    if (DEBUG) { \
+      printf("%14s(%4d): " fmt,  __func__, __LINE__, ##__VA_ARGS__); \
+    } \
+  } while (0)
 
 /*-------------------------------------------------------------------------*/
 
@@ -636,11 +652,18 @@ static void AppendAdrVals(void)
   AppendVals(AdrVals, AdrCnt);
 }
 
-static void AppendIns(const ins_t ins)
+static void __AppendIns(const ins_t ins)
 {
   BAsmCode[CodeLen++] = Lo(ins);
   BAsmCode[CodeLen++] = Lo(ins);
 }
+
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+#define AppendIns(...) do { \
+    __AppendIns(__VA_ARGS__); \
+    dprint("%s\n", TOSTRING(__VA_ARGS__));  \
+  } while (0)
 
 /*-------------------------------------------------------------------------*/
 /* Bedingung entschluesseln */
@@ -1263,6 +1286,7 @@ static void AddFixed(const char *NewName, cpu_core_mask_t core_mask, Word NewCod
   order_array_rsv_end(FixedOrders, BaseOrder);
   FixedOrders[InstrZ].core_mask = core_mask;
   FixedOrders[InstrZ].Code = NewCode;
+  dprint("%d: %s %02x %02x\n", InstrZ, NewName, (NewCode>>0)&0xff, (NewCode>>8)&0xff);
   AddInstTable(InstTable, NewName, InstrZ++, DecodeFixed);
 }
 
@@ -1360,8 +1384,59 @@ static void MakeCode_Z80(void)
 
   if (DecodeIntelPseudo(False)) return;
 
+  switch (ArgCnt) {
+  case 0:
+    dprint("%s\n", OpPart.str.p_str);
+    break;
+  case 1:
+    dprint("%s %s\n", OpPart.str.p_str, ArgStr[1].str.p_str);
+    break;
+  case 2:
+    dprint("%s %s %s\n", OpPart.str.p_str, ArgStr[1].str.p_str, ArgStr[2].str.p_str);
+    break;
+  case 3:
+    dprint("%s %s %s %s\n", OpPart.str.p_str, ArgStr[1].str.p_str, ArgStr[2].str.p_str,
+           ArgStr[3].str.p_str);
+    break;
+  default:
+    dprint("%s %s %s %s ...\n", OpPart.str.p_str, ArgStr[1].str.p_str, ArgStr[2].str.p_str,
+           ArgStr[3].str.p_str);
+    break;
+  }
   if (!LookupInstTable(InstTable, OpPart.str.p_str))
     WrStrErrorPos(ErrNum_UnknownInstruction, &OpPart);
+  switch (CodeLen) {
+  case 0:
+    dprint("%06x  *** empty ***\n", (unsigned)EProgCounter());
+    break;
+  case 1:
+  case 2:
+    dprint("%06x  %02x %02x\n", (unsigned)EProgCounter(),
+           BAsmCode[0], BAsmCode[1]);
+    break;
+  case 3:
+  case 4:
+    dprint("%06x  %02x %02x %02x %02x\n", (unsigned)EProgCounter(),
+           BAsmCode[0], BAsmCode[1], BAsmCode[2], BAsmCode[3]);
+    break;
+  case 5:
+  case 6:
+    dprint("%06x  %02x %02x %02x %02x %02x %02x\n", (unsigned)EProgCounter(),
+           BAsmCode[0], BAsmCode[1], BAsmCode[2], BAsmCode[3],
+           BAsmCode[4], BAsmCode[5]);
+    break;
+  case 7:
+  case 8:
+    dprint("%06x  %02x %02x %02x %02x %02x %02x %02x %02x\n", (unsigned)EProgCounter(),
+           BAsmCode[0], BAsmCode[1], BAsmCode[2], BAsmCode[3],
+           BAsmCode[4], BAsmCode[5], BAsmCode[6], BAsmCode[7]);
+    break;
+  default:
+    dprint("%06x  %02x %02x %02x %02x %02x %02x %02x %02x ...\n", (unsigned)EProgCounter(),
+           BAsmCode[0], BAsmCode[1], BAsmCode[2], BAsmCode[3],
+           BAsmCode[4], BAsmCode[5], BAsmCode[6], BAsmCode[7]);
+    break;
+  }
 }
 
 static void InitCode_Z80(void)
