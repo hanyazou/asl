@@ -306,7 +306,7 @@ static ins_t I_LD_RB_SI(reg_num_t r, int i) {
 //  memory load/store
 //
 //  3 ttt0_aaaa_abbb R/W reg[A] from/to memory address reg[B]
-static ins_t I_BUS_ACCESS(Byte bus_cmd, Byte bus_num, reg_num_t rb, reg_num_t ra) {
+static ins_t I_BUS_ACCESS(Byte bus_cmd, Byte bus_num, reg_num_t ra, reg_num_t rb) {
   return 0x3000 | (bus_cmd<<9) | (bus_num<<8) | (ra<<4) | rb;
 }
 static ins_t I_LD_M_R (reg_num_t rb, reg_num_t ra) {
@@ -655,7 +655,7 @@ static void AppendAdrVals(void)
 static void __AppendIns(const ins_t ins)
 {
   BAsmCode[CodeLen++] = Lo(ins);
-  BAsmCode[CodeLen++] = Lo(ins);
+  BAsmCode[CodeLen++] = Hi(ins);
 }
 
 #define STRINGIFY(x) #x
@@ -713,7 +713,7 @@ static void DecodeFixed(Word Index)
 
   if (ChkArgCnt(0, 0) && chk_core_mask(POrder->core_mask)) {
     BAsmCode[CodeLen++] = Lo(POrder->Code);
-    BAsmCode[CodeLen++] = Lo(POrder->Code);
+    BAsmCode[CodeLen++] = Hi(POrder->Code);
   } else {
     // TODO, output error here
   }
@@ -823,7 +823,9 @@ static void DecodeALU(Word Code)
   if (ArgCnt == 2) {
     DecodeAdr(&ArgStr[1], MModReg);
     if (AdrMode != ModReg) {
-      WrError(ErrNum_InvAddrMode);
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
       return;
     }
     dst = AdrPart;
@@ -839,8 +841,8 @@ static void DecodeALU(Word Code)
     imm = AdrVals[0];
 
     switch (Code) {
-    case G_ADD: I_ADD_R_I(dst, imm);    break;
-    case G_SUB: I_SUB_R_I(dst, imm);    break;
+    case G_ADD: AppendIns(I_ADD_R_I(dst, imm));	break;
+    case G_SUB: AppendIns(I_SUB_R_I(dst, imm)); break;
     default: WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[2]); return;
     }
     return;
@@ -879,7 +881,7 @@ static void DecodeShift(Word Code)
   reg_num_t reg_num = 0;
   Byte imm;
 
-  if (!ChkArgCnt(1, 1))
+  if (!ChkArgCnt(2, 2))
     return;
 
   OpSize = eSymbolSizeUnknown;
@@ -888,7 +890,7 @@ static void DecodeShift(Word Code)
   reg_num = AdrPart;
 
   OpSize = eSymbolSize8Bit;
-  DecodeAdr(&ArgStr[1], MModImm);
+  DecodeAdr(&ArgStr[2], MModImm);
   if (AdrMode != ModImm) return;
   imm = AdrVals[0];
 
@@ -1148,7 +1150,8 @@ static void DecodeJR(Word Code)
       AppendIns(I_JR_N_(Cond & ~reg_flag_not, r));
     } else {
       AppendIns(I_JR_(Cond, r));
-   }
+    }
+    break;
   case ModImm:
     dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
     if (!EvalResult.OK)
@@ -1184,7 +1187,7 @@ static void DecodeDJNZ(Word Code)
   if (!ChkArgCnt(2, 2))
     return;
 
-  DecodeAdr(&ArgStr[1], MModIndReg);
+  DecodeAdr(&ArgStr[1], MModReg);
   if (AdrMode != ModReg) return;
   ra = AdrPart;
 
@@ -1194,6 +1197,7 @@ static void DecodeDJNZ(Word Code)
   case ModIndReg:
     rb = AdrPart;
     AppendIns(I_DJNZ(ra, rb));
+    break;
   case ModImm:
     dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
     if (!EvalResult.OK)
