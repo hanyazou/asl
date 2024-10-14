@@ -1362,6 +1362,8 @@ static void InitFields(void)
   InstrZ = 0;
   AddFixed("NOP"   , e_core_mask_all    , I_NOP());
   AddFixed("HALT"  , e_core_mask_all    , I_HALT());
+  AddFixed("INVL"  , e_core_mask_all    , I_INV());
+
 }
 
 static void DeinitFields(void)
