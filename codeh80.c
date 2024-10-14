@@ -201,18 +201,18 @@ static ins_t I_LD_R_I(reg_num_t r)  { return 0x00f0 | r; }
 
 static ins_t I_PUSH_R(reg_num_t r)  { return 0x0100 | r; }
 static ins_t I_POP_R(reg_num_t r)   { return 0x0110 | r; }
-// static ins_t I_EXTN_RW(reg_num_t r) { return 0x0120 | r; }
-// static ins_t I_EXTN_RB(reg_num_t r) { return 0x0130 | r; }
+static ins_t I_EXTN_RW(reg_num_t r) { return 0x0120 | r; }
+static ins_t I_EXTN_RB(reg_num_t r) { return 0x0130 | r; }
 
-// static ins_t I_CPL_R(reg_num_t r)   { return 0x0140 | r; }
-// static ins_t I_NEG_R(reg_num_t r)   { return 0x0150 | r; }
+static ins_t I_CPL_R(reg_num_t r)   { return 0x0140 | r; }
+static ins_t I_NEG_R(reg_num_t r)   { return 0x0150 | r; }
 static ins_t I_LD_RW_I(reg_num_t r) { return 0x0160 | r; }
 static ins_t I_LD_RW_SI(reg_num_t r){ return 0x0170 | r; }
 
-// static ins_t I_INVF(flag_num_t f)   { return 0x0180 | f; }
-// static ins_t I_SETF(flag_num_t f)   { return 0x0190 | f; }
-// static ins_t I_CLRF(flag_num_t f)   { return 0x01a0 | f; }
-// static ins_t I_TESTF(flag_num_t f)  { return 0x01b0 | f; }
+static ins_t I_INVF(flag_num_t f)   { return 0x0180 | f; }
+static ins_t I_SETF(flag_num_t f)   { return 0x0190 | f; }
+static ins_t I_CLRF(flag_num_t f)   { return 0x01a0 | f; }
+static ins_t I_TSTF(flag_num_t f)   { return 0x01b0 | f; }
 
 static ins_t I_CALL_R(reg_num_t r)  { return 0x01c0 | r; }
 static ins_t I_RST_N(bus_addr_t n)  { return 0x01d0 | (n/8); }
@@ -285,7 +285,6 @@ static ins_t I_SUB_R_I(reg_num_t a, Byte n)  { return 0x0900 | (a<<4) | n; }
 static ins_t I_DJNZ(reg_num_t a, reg_num_t b) { return 0x0a00 | (a<<4) | b; }
 
 //  0 110a_aaaa_bbbb EX A, B
-/*
 static ins_t I_EX_R_R(reg_num_t a, reg_num_t b) {
   if (((a>>4)&1) && ~((b>>4)&1))
     return 0x0c00 | (a << 4) | b;
@@ -295,7 +294,6 @@ static ins_t I_EX_R_R(reg_num_t a, reg_num_t b) {
   else
     return I_INV();
 }
-*/
 
 //  0 1110_aaaa_bbbb reserved 空き
 //  0 1111_aaaa_bbbb reserved 空き
@@ -415,13 +413,14 @@ enum {
   G_LD_SW,
   G_PUSH,
   G_POP,
-  G_EXTN,
+  G_EXTN_W,
+  G_EXTN_B,
   G_CPL,
   G_NEG,
   G_INVF,
   G_SETF,
   G_CLRF,
-  G_TESTF,
+  G_TSTF,
   G_CALL,
   G_RST,
   G_JP,
@@ -819,6 +818,105 @@ static void DecodeLD(Word size)
     break;
   default:
     WrError(ErrNum_InvAddrMode);
+    return;
+  }
+}
+
+static void DecodeImm1(Word Code)
+{
+  Byte imm;
+
+  if (!ChkArgCnt(1, 1))
+      return;
+
+  DecodeAdr(&ArgStr[1], MModImm);
+  if (AdrMode != ModReg) return;
+  imm = AdrVals[0];
+
+  switch (Code) {
+  case G_INVF:
+  case G_SETF:
+  case G_CLRF:
+  case G_TSTF:
+    if (imm & 0xf) {
+      WrError(ErrNum_ArgOutOfRange);
+    }
+    AppendIns(I_INVF(imm));
+    break;
+  default:
+    WrError(ErrNum_InternalError);
+    return;
+  }
+
+  switch (Code) {
+  case G_INVF:  AppendIns(I_INVF(imm)); break;
+  case G_SETF:  AppendIns(I_SETF(imm)); break;
+  case G_CLRF:  AppendIns(I_CLRF(imm)); break;
+  case G_TSTF:  AppendIns(I_TSTF(imm)); break;
+  default: WrError(ErrNum_InternalError); return;
+  }
+}
+
+static void DecodeReg1(Word Code)
+{
+  reg_num_t r;
+
+  if (!ChkArgCnt(1, 1))
+      return;
+
+  DecodeAdr(&ArgStr[1], MModReg);
+  if (AdrMode != ModReg) return;
+  r = AdrPart;
+
+  switch (Code) {
+  case G_EXTN_W:
+  case G_EXTN_B:
+  case G_CPL:
+  case G_NEG:
+    if (15 < r) {
+      WrError(ErrNum_ArgOutOfRange);
+      return;
+    }
+    break;
+  default:
+    WrError(ErrNum_InternalError);
+    return;
+  }
+
+  switch (Code) {
+  case G_EXTN_W:    AppendIns(I_EXTN_RW(r));    break;
+  case G_EXTN_B:    AppendIns(I_EXTN_RB(r));    break;
+  case G_CPL:       AppendIns(I_CPL_R(r));      break;
+  case G_NEG:       AppendIns(I_NEG_R(r));      break;
+  default: WrError(ErrNum_InternalError); return;
+  }
+}
+
+static void DecodeReg2(Word Code)
+{
+  reg_num_t ra, rb;
+
+  if (!ChkArgCnt(2, 2))
+      return;
+
+  DecodeAdr(&ArgStr[1], MModReg);
+  if (AdrMode != ModReg) return;
+  ra = AdrPart;
+
+  DecodeAdr(&ArgStr[2], MModReg);
+  if (AdrMode != ModReg) return;
+  rb = AdrPart;
+
+  switch (Code) {
+  case G_EX:
+    if (((ra>>4)&1) && ((rb>>4)&1)) {
+      WrError(ErrNum_InvReg);
+      return;
+    }
+    AppendIns(I_EX_R_R(ra, rb));
+    break;
+  default:
+    WrError(ErrNum_InternalError);
     return;
   }
 }
@@ -1332,6 +1430,18 @@ static void InitFields(void)
   AddInstTable(InstTable, "JR" ,    G_JR,               DecodeJR);
   AddInstTable(InstTable, "DJNZ",   G_DJNZ,             DecodeDJNZ);
   AddInstTable(InstTable, "RST",    G_RST,              DecodeRST);
+
+  AddInstTable(InstTable, "INVF",   G_INVF,             DecodeImm1);
+  AddInstTable(InstTable, "SETF",   G_SETF,             DecodeImm1);
+  AddInstTable(InstTable, "CLRF",   G_CLRF,             DecodeImm1);
+  AddInstTable(InstTable, "TSTF",   G_TSTF,             DecodeImm1);
+
+  AddInstTable(InstTable, "EXTN.W", G_EXTN_W,           DecodeReg1);
+  AddInstTable(InstTable, "EXTN.B", G_EXTN_B,           DecodeReg1);
+  AddInstTable(InstTable, "CPL",    G_CPL,              DecodeReg1);
+  AddInstTable(InstTable, "NEG",    G_NEG,              DecodeReg1);
+
+  AddInstTable(InstTable, "EX",     G_EX,               DecodeReg2);
 
   AddInstTable(InstTable, "ADD",    G_ADD,              DecodeALU);
   AddInstTable(InstTable, "SUB",    G_SUB,              DecodeALU);
