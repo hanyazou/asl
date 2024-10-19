@@ -77,10 +77,12 @@ typedef struct
 #define ModReg 1
 #define ModIndReg 2
 #define ModImm 3
+#define ModAbs 4
 
 #define MModReg (1 << ModReg)
 #define MModIndReg (1 << ModIndReg)
 #define MModImm (1 << ModImm)
+#define MModAbs (1 << ModAbs)
 
 /*-------------------------------------------------------------------------*/
 /* Instruktionsgruppendefinitionen */
@@ -113,6 +115,7 @@ typedef struct {
 
 static Byte AdrPart;
 static tSymbolSize OpSize;
+static LongWord AdrVal;
 static Byte AdrVals[4];
 static ShortInt AdrMode;
 
@@ -542,7 +545,6 @@ DECLARE_AS_EVAL_CB(h80_eval_cb)
 
 static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
 {
-  Integer AdrInt;
   Boolean OK, is_indirect;
   tEvalResult EvalResult;
 
@@ -589,12 +591,22 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
     /* now we have parsed the expression, see what we can do with it: */
 
     if (z80_eval_cb_data.addr_reg == 0xff) {
-      /* no register: absolute */
-      // TODO
+      /* no register means absolute address indirect. */
+      WrError(ErrNum_InvAddrMode);
       goto found;
     } else {
       AdrMode = ModIndReg;
       AdrPart = z80_eval_cb_data.addr_reg;
+      goto found;
+    }
+  }
+
+  /* absolute address ? */
+
+  if (ModeMask & MModAbs) {
+    AdrVal = EvalAbsAdrExpression(pArg, &EvalResult);
+    if (EvalResult.OK) {
+      AdrMode = ModAbs;
       goto found;
     }
   }
@@ -606,30 +618,29 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
 
   switch (OpSize) {
     case eSymbolSize8Bit:
-      AdrVals[0] = EvalStrIntExpression(pArg, Int8, &OK);
+      AdrVal = EvalStrIntExpression(pArg, Int8, &OK);
       if (OK) {
         AdrMode = ModImm;
-        AdrCnt = 1;
+        AdrVals[AdrCnt++] = AdrVal;
       }
       break;
     case eSymbolSize16Bit:
-      AdrInt = EvalStrIntExpression(pArg, Int16, &OK);
+      AdrVal = EvalStrIntExpression(pArg, Int16, &OK);
       if (OK) {
-        AdrVals[0] = Lo(AdrInt);
-        AdrVals[1] = Hi(AdrInt);
         AdrMode = ModImm;
-        AdrCnt = 2;
+        AdrVals[AdrCnt++] = Lo(AdrVal);
+        AdrVals[AdrCnt++] = Hi(AdrVal);
       }
       break;
     case eSymbolSizeUnknown:
       {
-        LongWord ImmVal = EvalStrIntExpression(pArg, Int32, &OK);
+        AdrVal = EvalStrIntExpression(pArg, Int32, &OK);
         if (OK) {
           AdrMode = ModImm;
-          AdrVals[AdrCnt++] = (ImmVal >>  0) & 0xff;
-          AdrVals[AdrCnt++] = (ImmVal >>  8) & 0xff;
-          AdrVals[AdrCnt++] = (ImmVal >> 16) & 0xff;
-          AdrVals[AdrCnt++] = (ImmVal >> 24) & 0xff;
+          AdrVals[AdrCnt++] = (AdrVal >>  0) & 0xff;
+          AdrVals[AdrCnt++] = (AdrVal >>  8) & 0xff;
+          AdrVals[AdrCnt++] = (AdrVal >> 16) & 0xff;
+          AdrVals[AdrCnt++] = (AdrVal >> 24) & 0xff;
         }
       }
       break;
@@ -1097,158 +1108,20 @@ static void DecodeRET(Word Code)
   }
 }
 
-static IntType get_jr_dist(LongWord dest, LongInt *p_dist)
+static void encode_jump_reg(Word Code, int Cond, reg_num_t r, reg_num_t dec_r)
 {
-  *p_dist = dest - (EProgCounter() + 2);
-  if (RangeCheck(*p_dist, SInt8))
-    return SInt8;
-  *p_dist -= 2;
-  if (RangeCheck(*p_dist, SInt16))
-    return SInt16;
-  (*p_dist)--;
-  if (RangeCheck(*p_dist, SInt24))
-    return SInt24;
-  return UInt0;
-}
-
-static void DecodeJP(Word Code)
-{
-  reg_num_t r;
-  int Cond;
-
-  UNUSED(Code);
-
-  switch (ArgCnt) {
-  case 1:
-    Cond = reg_flag_none;
-    break;
-  case 2:
-    if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
-      WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-      return;
+  switch (Code) {
+  case G_JP:
+    if (Cond == reg_flag_none) {
+      AppendIns(I_JP_R(r));
+    } else
+    if (Cond & reg_flag_not) {
+      AppendIns(I_JP_N_(Cond & ~reg_flag_not, r));
+    } else {
+      AppendIns(I_JP_(Cond, r));
     }
     break;
-  default:
-    (void)ChkArgCnt(1, 2);
-    return;
-  }
-
-  DecodeAdr(&ArgStr[ArgCnt], MModIndReg);
-  if (AdrMode != ModIndReg) return;
-  r = AdrPart;
-
-  if (Cond == reg_flag_none) {
-    AppendIns(I_JP_R(r));
-  } else
-  if (Cond & reg_flag_not) {
-    AppendIns(I_JP_N_(Cond & ~reg_flag_not, r));
-  } else {
-    AppendIns(I_JP_(Cond, r));
-  }
-}
-
-static void DecodeCALL(Word Code)
-{
-  reg_num_t r;
-  int Cond;
-
-  UNUSED(Code);
-
-  switch (ArgCnt) {
-  case 1:
-    Cond = reg_flag_none;
-    break;
-  case 2:
-    if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
-      WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-      return;
-    }
-    break;
-  default:
-    (void)ChkArgCnt(1, 2);
-    return;
-  }
-
-  DecodeAdr(&ArgStr[ArgCnt], MModIndReg);
-  if (AdrMode != ModIndReg) return;
-  r = AdrPart;
-
-  if (Cond == reg_flag_none) {
-    AppendIns(I_CALL_R(r));
-  } else
-  if (Cond & reg_flag_not) {
-    AppendIns(I_CALL_N_(Cond & ~reg_flag_not, r));
-  } else {
-    AppendIns(I_CALL_(Cond, r));
-  }
-}
-
-static void encode_jr_core(IntType dist_size, Byte condition, LongInt dist)
-{
-  // TODO
-  WrError(ErrNum_InternalError);
-  return;
-  /*
-  switch (dist_size)
-  {
-    case SInt8:
-      CodeLen = 2;
-      BAsmCode[0] = condition << 3;
-      BAsmCode[1] = dist & 0xff;
-      break;
-    case SInt16:
-      CodeLen = 4;
-      BAsmCode[0] = 0xdd;
-      BAsmCode[1] = condition << 3;
-      BAsmCode[2] = dist & 0xff;
-      BAsmCode[3] = (dist >> 8) & 0xff;
-      break;
-    case SInt24:
-      CodeLen = 5;
-      BAsmCode[0] = 0xfd;
-      BAsmCode[1] = condition << 3;
-      BAsmCode[2] = dist & 0xff;
-      BAsmCode[3] = (dist >> 8) & 0xff;
-      BAsmCode[4] = (dist >> 16) & 0xff;
-      break;
-    default:
-      break;
-  }
-  */
-}
-
-static void DecodeJR(Word Code)
-{
-  reg_num_t r;
-  int Cond;
-
-  LongWord dest;
-  tEvalResult EvalResult;
-  LongInt dist;
-  IntType dist_type;
-
-  UNUSED(Code);
-
-  switch (ArgCnt) {
-  case 1:
-    Cond = reg_flag_none;
-    break;
-  case 2:
-    if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
-      WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
-      return;
-    }
-    break;
-  default:
-    (void)ChkArgCnt(1, 2);
-    return;
-  }
-
-  OpSize = eSymbolSizeUnknown;
-  DecodeAdr(&ArgStr[ArgCnt], MModIndReg | MModImm);
-  switch (AdrMode) {
-  case ModIndReg:
-    r = AdrPart;
+  case G_JR:
     if (Cond == reg_flag_none) {
       AppendIns(I_JR_R(r));
     } else
@@ -1258,86 +1131,202 @@ static void DecodeJR(Word Code)
       AppendIns(I_JR_(Cond, r));
     }
     break;
-  case ModImm:
-    dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
-    if (!EvalResult.OK)
-      return;
-
-    dist_type = get_jr_dist(dest, &dist);
-    if (dist_type == UInt0) {
-      if (mFirstPassUnknownOrQuestionable(EvalResult.Flags)) {
-        dist_type = SInt24;
-      } else {
-        WrStrErrorPos(ErrNum_JmpDistTooBig, &ArgStr[ArgCnt]);
-        return;
-      }
+  case G_CALL:
+    if (Cond == reg_flag_none) {
+      AppendIns(I_CALL_R(r));
+    } else
+    if (Cond & reg_flag_not) {
+      AppendIns(I_CALL_N_(Cond & ~reg_flag_not, r));
+    } else {
+      AppendIns(I_CALL_(Cond, r));
     }
-    encode_jr_core(dist_type, Cond, dist);
+    break;
+  case G_DJNZ:
+    AppendIns(I_DJNZ(dec_r, r));
     break;
   default:
-    WrError(ErrNum_InvAddrMode);
-    break;
+    WrError(ErrNum_InternalError);
+    return;
   }
 }
 
-static void DecodeDJNZ(Word Code)
+static void encode_jump_adr(Word Code, IntType dist_type, Byte condition,
+                            LongInt dest, reg_num_t dec_r)
 {
-  reg_num_t ra, rb;
-  LongWord dest;
-  tEvalResult EvalResult;
-  LongInt dist;
-  IntType dist_type;
-
-  UNUSED(Code);
-
-  if (!ChkArgCnt(2, 2))
-    return;
-
-  DecodeAdr(&ArgStr[1], MModReg);
-  if (AdrMode != ModReg) return;
-  ra = AdrPart;
-
-  OpSize = eSymbolSizeUnknown;
-  DecodeAdr(&ArgStr[2], MModIndReg | MModImm);
-  switch (AdrMode) {
-  case ModIndReg:
-    rb = AdrPart;
-    AppendIns(I_DJNZ(ra, rb));
+  switch (dist_type) {
+  case SInt8:
+  case SInt16:
+    dprint("encode_jump_adr(Code=%d, dist=%d, Cond=0x%x, addr=%s%04x, dec_r=%d)\n",
+           Code, dist_type, condition,
+           (dest & (1 << 16)) ? "-" : "+",
+           (dest & (1 << 16)) ? -dest : dest, dec_r);
+    AppendIns(I_LD_RW_SI(0));  // load half word with sign extension
+    BAsmCode[CodeLen++] = Lo(dest);
+    BAsmCode[CodeLen++] = Hi(dest);
     break;
-  case ModImm:
-    dest = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
-    if (!EvalResult.OK)
-      return;
-
-    dist_type = get_jr_dist(dest, &dist);
-    if (dist_type == UInt0) {
-      if (mFirstPassUnknownOrQuestionable(EvalResult.Flags)) {
-        dist_type = SInt24;
-      } else {
-        WrStrErrorPos(ErrNum_JmpDistTooBig, &ArgStr[ArgCnt]);
-        return;
-      }
-    }
-
-    // TODO
-    WrError(ErrNum_InternalError);
-    return;
-    /*
-    switch (dist_size) {
-    case SInt8:
-      break;
-    case SInt16:
-      break;
-    case SInt24:
-      break;
-    default:
-      break;
-    }
-    */
+  case UInt8:
+  case UInt16:
+    dprint("encode_jump_adr(Code=%d, dist=%d, Cond=0x%x, addr=%04x, dec_r=%d)\n",
+           Code, dist_type, condition, dest, dec_r);
+    AppendIns(I_LD_RW_I(0));  // load half word (upper half of 32 bit will be cleared)
+    BAsmCode[CodeLen++] = Lo(dest);
+    BAsmCode[CodeLen++] = Hi(dest);
+    break;
+  case SInt24:
+  case SInt32:
+  case UInt24:
+  case UInt32:
+    dprint("encode_jump_adr(Code=%d, dist=%d, Cond=0x%x, addr=%08x, dec_r=%d)\n",
+           Code, dist_type, condition, dest, dec_r);
+    AppendIns(I_LD_R_I(0));
+    BAsmCode[CodeLen++] = ((dest >>  0) & 0xff);
+    BAsmCode[CodeLen++] = ((dest >>  8) & 0xff);
+    BAsmCode[CodeLen++] = ((dest >> 16) & 0xff);
+    BAsmCode[CodeLen++] = ((dest >> 24) & 0xff);
     break;
   default:
-    WrError(ErrNum_InvAddrMode);
+    WrError(ErrNum_InternalError);
+    return;
+  }
+
+  encode_jump_reg(Code, condition, 0, dec_r);
+}
+
+static IntType abs_dest_type(LongWord dest)
+{
+  if (RangeCheck(dest, UInt16))
+    return UInt16;
+  return UInt32;
+}
+
+static IntType get_dist(Boolean relative, LongWord dest, LongInt *p_dest)
+{
+  LongWord orig = EProgCounter();
+  *p_dest = dest - (orig + 4);  // 4 bytes (LD r0, nnnn)
+  if (RangeCheck(*p_dest, SInt16))
+    return SInt16;
+  return SInt32;
+}
+
+static void DecodeJump(Word Code)
+{
+  reg_num_t dec_r = 0;
+  reg_num_t r;
+  int Cond;
+  tEvalResult EvalResult;
+  LongInt dest_adr;
+  IntType abs_type, rel_type;
+  Boolean prefer_short_adr;
+  Boolean prefer_relative_adr;
+
+  if (!ChkArgCnt(1, 2))
+    return;
+
+  switch (Code) {
+  case G_DJNZ:
+    prefer_short_adr = True;
+    prefer_relative_adr = True;
     break;
+  case G_JP:
+    prefer_short_adr = False;
+    prefer_relative_adr = False;
+    break;
+  case G_JR:
+    prefer_short_adr = True;
+    prefer_relative_adr = True;
+    break;
+  case G_CALL:
+    prefer_short_adr = False;
+    prefer_relative_adr = False;
+    break;
+  default:
+    WrError(ErrNum_InternalError);
+    return;
+  }
+
+  if (ArgCnt == 1) {
+    switch (Code) {
+    case G_DJNZ:
+      (void)ChkArgCnt(2, 2);
+      return;
+    case G_JP:
+    case G_JR:
+    case G_CALL:
+      Cond = reg_flag_none;
+      break;
+    }
+  }
+  if (ArgCnt == 2) {
+    switch (Code) {
+    case G_DJNZ:
+      DecodeAdr(&ArgStr[1], MModReg);
+      dec_r = AdrPart;
+      if (AdrMode != ModReg) {
+        if (AdrMode != ModNone) {
+          WrError(ErrNum_InvAddrMode);
+        }
+        return;
+      }
+      break;
+    case G_JP:
+    case G_JR:
+    case G_CALL:
+      if (!DecodeCondition(ArgStr[1].str.p_str, &Cond)) {
+        WrStrErrorPos(ErrNum_UndefCond, &ArgStr[1]);
+        return;
+      }
+      break;
+    }
+  }
+
+  OpSize = eSymbolSizeUnknown;
+  DecodeAdr(&ArgStr[ArgCnt], MModIndReg | MModAbs);
+  if (AdrMode != ModIndReg && AdrMode != ModAbs) {
+    if (AdrMode != ModNone) {
+      WrError(ErrNum_InvAddrMode);
+    }
+    return;
+  }
+
+  /*
+   * jump to register indirect
+   */
+  if (AdrMode == ModIndReg) {
+    r = AdrPart;
+    encode_jump_reg(Code, Cond, r, dec_r);
+    return;
+  }
+
+  /*
+   * jump to specified address
+   */
+  AdrVal = EvalAbsAdrExpression(&ArgStr[ArgCnt], &EvalResult);
+  if (!EvalResult.OK)
+    return;
+
+  abs_type = abs_dest_type(AdrVal);
+  rel_type = get_dist(prefer_relative_adr, AdrVal, &dest_adr);
+  if (Code == G_JP && abs_type == UInt32 && rel_type == SInt16) {
+    prefer_short_adr = True;
+    prefer_relative_adr = True;
+    Code = G_JR;
+  }
+  if (Code == G_DJNZ && rel_type == SInt32) {
+    prefer_short_adr = False;
+    prefer_relative_adr = True;
+  }
+
+  if (prefer_short_adr && !mFirstPassUnknownOrQuestionable(EvalResult.Flags)
+      && ((prefer_relative_adr && rel_type != SInt8 && rel_type != SInt16)
+          || (!prefer_relative_adr && abs_type != UInt16 && abs_type != UInt16))) {
+    WrStrErrorPos(ErrNum_JmpDistTooBig, &ArgStr[ArgCnt]);
+    return;
+  }
+
+  if (prefer_relative_adr) {
+    encode_jump_adr(Code, rel_type, Cond, dest_adr, dec_r);
+  } else {
+    encode_jump_adr(Code, abs_type, Cond, AdrVal, dec_r);
   }
 }
 
@@ -1425,10 +1414,10 @@ static void InitFields(void)
   AddInstTable(InstTable, "OUT.B",  bus_cmd_write_b,    DecodeIN_OUT);
   AddInstTable(InstTable, "OUT.W",  bus_cmd_write_w,    DecodeIN_OUT);
   AddInstTable(InstTable, "RET" ,   G_RET,              DecodeRET);
-  AddInstTable(InstTable, "JP" ,    G_JP,               DecodeJP);
-  AddInstTable(InstTable, "CALL",   G_CALL,             DecodeCALL);
-  AddInstTable(InstTable, "JR" ,    G_JR,               DecodeJR);
-  AddInstTable(InstTable, "DJNZ",   G_DJNZ,             DecodeDJNZ);
+  AddInstTable(InstTable, "JP" ,    G_JP,               DecodeJump);
+  AddInstTable(InstTable, "CALL",   G_CALL,             DecodeJump);
+  AddInstTable(InstTable, "JR" ,    G_JR,               DecodeJump);
+  AddInstTable(InstTable, "DJNZ",   G_DJNZ,             DecodeJump);
   AddInstTable(InstTable, "RST",    G_RST,              DecodeRST);
 
   AddInstTable(InstTable, "INVF",   G_INVF,             DecodeImm1);
