@@ -948,7 +948,12 @@ static void DecodeALU(Word Code)
     dst = AdrPart;
 
     OpSize = eSymbolSize8Bit;
-    DecodeAdr(&ArgStr[2], MModImm);
+    DecodeAdr(&ArgStr[2], MModImm | MModReg);
+    if (AdrMode == ModReg) {
+      ra = dst;
+      rb = AdrPart;
+      goto three_registers;
+    }
     if (AdrMode != ModImm) {
       if (AdrMode != ModNone) {
         WrError(ErrNum_InvAddrMode);
@@ -980,6 +985,7 @@ static void DecodeALU(Word Code)
   if (AdrMode != ModReg) return;
   rb = AdrPart;
 
+ three_registers:
   switch (Code) {
   case G_ADD: AppendIns(I_ADD(dst, ra, rb));    break;
   case G_SUB: AppendIns(I_SUB(dst, ra, rb));    break;
@@ -1584,7 +1590,6 @@ static Boolean QualifyQuote_Z80(const char *pStart, const char *pQuotePos)
 
 static void DissectReg_H80(char *p_dest, size_t dest_size, tRegInt value, tSymbolSize inp_size)
 {
-  printf("#### %s(%d): value=%d, inp_size=%d\n", __func__, __LINE__, value, inp_size);
   as_snprintf(p_dest, dest_size, "r%d", value);
 }
 
