@@ -963,18 +963,25 @@ static void DecodeALU(Word Code)
   reg_num_t dst, ra, rb;
   Byte imm;
 
+  OpSize = eSymbolSizeUnknown;
   if (ArgCnt == 2) {
-    DecodeAdr(&ArgStr[1], MModReg);
-    if (AdrMode != ModReg) {
-      if (AdrMode != ModNone) {
-        WrError(ErrNum_InvAddrMode);
+    DecodeAdr(&ArgStr[1], MModReg | MModImm);
+    if (AdrMode == ModImm && Code == G_CP) {
+      LoadImm(1, AdrVal);
+      dst = 1;
+      ra = 1;
+    } else {
+      if (AdrMode == ModReg) {
+        dst = AdrPart;
+      } else {
+        if (AdrMode != ModNone) {
+          WrError(ErrNum_InvAddrMode);
+        }
+        return;
       }
-      return;
     }
-    dst = AdrPart;
 
-    OpSize = eSymbolSize8Bit;
-    DecodeAdr(&ArgStr[2], MModImm | MModReg);
+    DecodeAdr(&ArgStr[2], MModReg | MModImm);
     if (AdrMode == ModReg) {
       ra = dst;
       rb = AdrPart;
@@ -986,14 +993,18 @@ static void DecodeALU(Word Code)
       }
       return;
     }
-    imm = AdrVals[0];
-
-    switch (Code) {
-    case G_ADD: AppendIns(I_ADD_R_I(dst, imm));	break;
-    case G_SUB: AppendIns(I_SUB_R_I(dst, imm)); break;
-    default: WrStrErrorPos(ErrNum_InvAddrMode, &ArgStr[2]); return;
+    imm = AdrVal;
+    if ((imm & 0xfffffff0) == 0) {
+      switch (Code) {
+      case G_ADD: AppendIns(I_ADD_R_I(dst, imm)); return;
+      case G_SUB: AppendIns(I_SUB_R_I(dst, imm)); return;
+      }
     }
-    return;
+
+    LoadImm(0, AdrVal);
+    ra = dst;
+    rb = 0;
+    goto three_registers;
   }
 
   if (!ChkArgCnt(3, 3))
@@ -1003,13 +1014,35 @@ static void DecodeALU(Word Code)
   if (AdrMode != ModReg) return;
   dst = AdrPart;
 
-  DecodeAdr(&ArgStr[2], MModReg);
-  if (AdrMode != ModReg) return;
-  ra = AdrPart;
+  DecodeAdr(&ArgStr[2], MModReg | MModImm);
+  if (AdrMode == ModImm) {
+    LoadImm(0, AdrVal);
+    ra = 0;
+  } else {
+    if (AdrMode == ModReg) {
+      ra = AdrPart;
+    } else {
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
+      return;
+    }
+  }
 
-  DecodeAdr(&ArgStr[3], MModReg);
-  if (AdrMode != ModReg) return;
-  rb = AdrPart;
+  DecodeAdr(&ArgStr[3], MModReg | MModImm);
+  if (AdrMode == ModImm) {
+    LoadImm(1, AdrVal);
+    rb = 1;
+  } else {
+    if (AdrMode == ModReg) {
+      rb = AdrPart;
+    } else {
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
+      return;
+    }
+  }
 
  three_registers:
   switch (Code) {
