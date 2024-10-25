@@ -21,6 +21,14 @@
         ld	r5, 0fedcba98h
         ld	r10, 54761032h
         ld	r15, 0dcfe98bah
+        ld	r0, 0ffffff98h
+        ld	r0, 0ffffba98h
+        ld	r0, 0ffdcba98h
+        ld	r0, 0fedcba98h
+        ld	r0, 000000098h
+        ld	r0, 00000ba98h
+        ld	r0, 000dcba98h
+        ld	r0, 0fedcba98h
         push	r0
         push	r5
         push	r10

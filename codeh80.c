@@ -737,6 +737,30 @@ static void DecodeFixed(Word Index)
   }
 }
 
+static void LoadImm(reg_num_t r, LongWord imm)
+{
+    if ((imm & 0xffffff80) == 0xffffff80) {
+      AppendIns(I_LD_RB_SI(r, imm & 0xff));
+    } else
+    if ((imm & 0xffff8000) == 0xffff8000) {
+      AppendIns(I_LD_RW_SI(r));
+      AppendIns(imm & 0xffff);
+    } else
+    if ((imm & 0xffffff00) == 0x00000000) {
+      AppendIns(I_LD_RB_I(r, imm & 0xff));
+    } else
+    if ((imm & 0xffff0000) == 0x00000000) {
+      AppendIns(I_LD_RW_I(r));
+      AppendIns(imm & 0xffff);
+    } else {
+      AppendIns(I_LD_R_I(r));
+      BAsmCode[CodeLen++] = ((imm >>  0) & 0xff);
+      BAsmCode[CodeLen++] = ((imm >>  8) & 0xff);
+      BAsmCode[CodeLen++] = ((imm >> 16) & 0xff);
+      BAsmCode[CodeLen++] = ((imm >> 24) & 0xff);
+    }
+}
+
 /*!------------------------------------------------------------------------
  * \fn     DecodeLD(size)
  * \brief  handle LD instruction
@@ -787,7 +811,9 @@ static void DecodeLD(Word size)
       break;
     case ModImm:    /* LD R, imm */
       switch (OpSize) {
-      case eSymbolSizeUnknown:  AppendIns(I_LD_R_I(dst)); break;
+      case eSymbolSizeUnknown:
+        LoadImm(dst, AdrVal);
+        return;
       case eSymbolSize8Bit:
         if (extend_sign)
           AppendIns(I_LD_RB_SI(dst, AdrVals[0]));
