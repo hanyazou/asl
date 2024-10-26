@@ -238,6 +238,28 @@
 	in.b	r10, (r5)
 	in.b	r15, (r0)
 
+        out	(r2), 12345678h
+        out	(r3), 1234h
+        out	(r4), 12h
+        out	(12345678h),r5
+        out	(1234h),r6
+        out	(12h),r7
+        out	(12345678h),9ah
+        out	(1234h),9abch
+        out	(12h),9abcdef0h
+        in	r8,(12345678h)
+        in	r9,(1234h)
+        in	r10,(12h)
+
+	expect  1350,1350,1350,1350,1350,1350
+        in	12h,(12345678h)
+        in	1234h,(1234h)
+        in	12345678h,(12h)
+        in	12h,(r11)
+        in	1234h,(r12)
+        in	12345678h,(r13)
+	endexpect
+
 	ld	r0,  r31
 	ld	r5,  r30
 	ld	r10, r25

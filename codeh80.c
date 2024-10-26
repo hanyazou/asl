@@ -78,11 +78,13 @@ typedef struct
 #define ModIndReg 2
 #define ModImm 3
 #define ModAbs 4
+#define ModIndAbs 5
 
 #define MModReg (1 << ModReg)
 #define MModIndReg (1 << ModIndReg)
 #define MModImm (1 << ModImm)
 #define MModAbs (1 << ModAbs)
+#define MModIndAbs (1 << ModIndAbs)
 
 /*-------------------------------------------------------------------------*/
 /* Instruktionsgruppendefinitionen */
@@ -590,15 +592,48 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
 
     /* now we have parsed the expression, see what we can do with it: */
 
-    if (z80_eval_cb_data.addr_reg == 0xff) {
-      /* no register means absolute address indirect. */
-      WrError(ErrNum_InvAddrMode);
-      goto found;
-    } else {
+    if (z80_eval_cb_data.addr_reg != 0xff) {
+      /* register indirect */
       AdrMode = ModIndReg;
       AdrPart = z80_eval_cb_data.addr_reg;
       goto found;
     }
+
+    /* no register means absolute address indirect. */
+    if (!(ModeMask & MModIndAbs)) {
+      goto inv_mode;
+    }
+
+    switch (OpSize) {
+      case eSymbolSize8Bit:
+        AdrVal = EvalStrIntExpression(&arg, Int8, &OK);
+        if (!OK)
+          goto inv_mode;
+        AdrMode = ModIndAbs;
+        AdrVals[AdrCnt++] = AdrVal;
+        break;
+      case eSymbolSize16Bit:
+        AdrVal = EvalStrIntExpression(&arg, Int16, &OK);
+        if (!OK)
+          goto inv_mode;
+        AdrMode = ModIndAbs;
+        AdrVals[AdrCnt++] = Lo(AdrVal);
+        AdrVals[AdrCnt++] = Hi(AdrVal);
+        break;
+      case eSymbolSizeUnknown:
+        AdrVal = EvalStrIntExpression(&arg, Int32, &OK);
+        if (!OK)
+          goto inv_mode;
+        AdrMode = ModIndAbs;
+        AdrVals[AdrCnt++] = (AdrVal >>  0) & 0xff;
+        AdrVals[AdrCnt++] = (AdrVal >>  8) & 0xff;
+        AdrVals[AdrCnt++] = (AdrVal >> 16) & 0xff;
+        AdrVals[AdrCnt++] = (AdrVal >> 24) & 0xff;
+        break;
+      default:
+        break;
+    }
+    goto found;
   }
 
   /* absolute address ? */
@@ -619,30 +654,28 @@ static ShortInt DecodeAdr(const tStrComp *pArg, unsigned ModeMask)
   switch (OpSize) {
     case eSymbolSize8Bit:
       AdrVal = EvalStrIntExpression(pArg, Int8, &OK);
-      if (OK) {
-        AdrMode = ModImm;
-        AdrVals[AdrCnt++] = AdrVal;
-      }
+      if (!OK)
+        goto inv_mode;
+      AdrMode = ModImm;
+      AdrVals[AdrCnt++] = AdrVal;
       break;
     case eSymbolSize16Bit:
       AdrVal = EvalStrIntExpression(pArg, Int16, &OK);
-      if (OK) {
-        AdrMode = ModImm;
-        AdrVals[AdrCnt++] = Lo(AdrVal);
-        AdrVals[AdrCnt++] = Hi(AdrVal);
-      }
+      if (!OK)
+        goto inv_mode;
+      AdrMode = ModImm;
+      AdrVals[AdrCnt++] = Lo(AdrVal);
+      AdrVals[AdrCnt++] = Hi(AdrVal);
       break;
     case eSymbolSizeUnknown:
-      {
-        AdrVal = EvalStrIntExpression(pArg, Int32, &OK);
-        if (OK) {
-          AdrMode = ModImm;
-          AdrVals[AdrCnt++] = (AdrVal >>  0) & 0xff;
-          AdrVals[AdrCnt++] = (AdrVal >>  8) & 0xff;
-          AdrVals[AdrCnt++] = (AdrVal >> 16) & 0xff;
-          AdrVals[AdrCnt++] = (AdrVal >> 24) & 0xff;
-        }
-      }
+      AdrVal = EvalStrIntExpression(pArg, Int32, &OK);
+      if (!OK)
+        goto inv_mode;
+      AdrMode = ModImm;
+      AdrVals[AdrCnt++] = (AdrVal >>  0) & 0xff;
+      AdrVals[AdrCnt++] = (AdrVal >>  8) & 0xff;
+      AdrVals[AdrCnt++] = (AdrVal >> 16) & 0xff;
+      AdrVals[AdrCnt++] = (AdrVal >> 24) & 0xff;
       break;
     default:
       break;
@@ -1121,22 +1154,48 @@ static void DecodeIN_OUT(Word bus_cmd)
 {
   reg_num_t port_reg_num;
   reg_num_t reg_num;
+  LongInt rewind_len = CodeLen;
 
   if (!ChkArgCnt(2, 2))
     return;
 
+  Boolean in = (bus_cmd & 0x1) ? True : False;
   const tStrComp *pPortArg = (bus_cmd & 0x1) ? &ArgStr[2] : &ArgStr[1];
   const tStrComp *pRegArg =  (bus_cmd & 0x1) ? &ArgStr[1] : &ArgStr[2];
 
   OpSize = eSymbolSizeUnknown;
 
-  DecodeAdr(pPortArg, MModIndReg);
-  if (AdrMode != ModIndReg) return;
-  port_reg_num = AdrPart;
+  DecodeAdr(pPortArg, MModIndReg | MModIndAbs);
+  if (AdrMode == ModIndReg) {
+    port_reg_num = AdrPart;
+  } else {
+    if (AdrMode == ModIndAbs) {
+      port_reg_num = 0;
+      LoadImm(port_reg_num, AdrVal);
+    } else {
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
+      CodeLen = rewind_len;
+      return;
+    }
+  }
 
-  DecodeAdr(pRegArg, MModReg);
-  if (AdrMode != ModReg) return;
-  reg_num = AdrPart;
+  DecodeAdr(pRegArg, in ? MModReg : (MModReg | MModImm));
+  if (AdrMode == ModReg) {
+    reg_num = AdrPart;
+  } else {
+    if (!in && AdrMode == ModImm) {
+      reg_num = 1;
+      LoadImm(reg_num, AdrVal);
+    } else {
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
+      CodeLen = rewind_len;
+      return;
+    }
+  }
 
   AppendIns(I_BUS_ACCESS(bus_cmd, bus_num_io, reg_num, port_reg_num));
 }
