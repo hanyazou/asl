@@ -826,7 +826,7 @@ static void DecodeLD(Word size)
   dst = AdrPart;
   switch (AdrMode) {
   case ModReg:
-    OpSize = op_size;
+    OpSize = eSymbolSizeUnknown;
     DecodeAdr(&ArgStr[2], MModReg | MModIndReg | MModImm | MModIndAbs);
     switch (AdrMode) {
     case ModReg:    /* LD R, R */
@@ -881,7 +881,12 @@ static void DecodeLD(Word size)
     case ModIndAbs: /* LD R, (imm) */
       src = 0;
       LoadImm(src, AdrVal);
-      AppendIns(I_LD_R_M(dst, src));
+      switch (op_size) {
+      case eSymbolSizeUnknown:  AppendIns(I_LD_R_M(dst, src));  break;
+      case eSymbolSize8Bit:     AppendIns(I_LD_RB_M(dst, src)); break;
+      case eSymbolSize16Bit:    AppendIns(I_LD_RW_M(dst, src)); break;
+      default: WrError(ErrNum_InternalError); return;
+      }
       break;
     default:
       if (AdrMode != ModNone) {
@@ -905,7 +910,12 @@ static void DecodeLD(Word size)
     case ModImm:    /* LD (R), imm */
       src = 0;
       LoadImm(src, AdrVal);
-      AppendIns(I_LD_M_R(dst, src));
+      switch (op_size) {
+      case eSymbolSizeUnknown:  AppendIns(I_LD_M_R(dst, src));  break;
+      case eSymbolSize8Bit:     AppendIns(I_LD_M_RB(dst, src)); break;
+      case eSymbolSize16Bit:    AppendIns(I_LD_M_RW(dst, src)); break;
+      default: WrError(ErrNum_InternalError); return;
+      }
       break;
     default:
       if (AdrMode != ModNone) {

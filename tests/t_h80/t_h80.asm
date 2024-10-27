@@ -272,13 +272,32 @@
 	ld	r2,  (12h)
 	ld	r3,  (1234h)
 	ld	r4,  (12345678h)
+	ld.w	r2,  (12h)
+	ld.w	r3,  (1234h)
+	ld.w	r4,  (12345678h)
+	ld.b	r2,  (12h)
+	ld.b	r3,  (1234h)
+	ld.b	r4,  (12345678h)
+
 	ld	(21h), r5
 	ld	(4321h), r6
 	ld	(87654321h), r7
+	ld.w	(21h), r5
+	ld.w	(4321h), r6
+	ld.w	(87654321h), r7
+	ld.b	(21h), r5
+	ld.b	(4321h), r6
+	ld.b	(87654321h), r7
 
 	ld	(r2),  12h
 	ld	(r3),  1234h
 	ld	(r4),  12345678h
+	ld.w	(r2),  12h
+	ld.w	(r3),  1234h
+	ld.w	(r4),  12345678h
+	ld.b	(r2),  12h
+	ld.b	(r3),  1234h
+	ld.b	(r4),  12345678h
 
 	add	r0,  r1,  r2
 	add	r12, r13, r15
