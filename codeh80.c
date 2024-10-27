@@ -891,7 +891,7 @@ static void DecodeLD(Word size)
     }
     break;
   case ModIndReg:
-    DecodeAdr(&ArgStr[2], MModReg);
+    DecodeAdr(&ArgStr[2], MModReg | MModImm);
     switch (AdrMode) {
     case ModReg:    /* LD (R), R */
       src = AdrPart;
@@ -902,8 +902,15 @@ static void DecodeLD(Word size)
       default: WrError(ErrNum_InternalError); return;
       }
       break;
+    case ModImm:    /* LD (R), imm */
+      src = 0;
+      LoadImm(src, AdrVal);
+      AppendIns(I_LD_M_R(dst, src));
+      break;
     default:
-      WrError(ErrNum_InvAddrMode);
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
       return;
     }
     break;
@@ -923,12 +930,16 @@ static void DecodeLD(Word size)
       }
       break;
     default:
-      WrError(ErrNum_InvAddrMode);
+      if (AdrMode != ModNone) {
+        WrError(ErrNum_InvAddrMode);
+      }
       return;
     }
     break;
   default:
-    WrError(ErrNum_InvAddrMode);
+    if (AdrMode != ModNone) {
+      WrError(ErrNum_InvAddrMode);
+    }
     return;
   }
 }

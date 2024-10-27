@@ -276,6 +276,10 @@
 	ld	(4321h), r6
 	ld	(87654321h), r7
 
+	ld	(r2),  12h
+	ld	(r3),  1234h
+	ld	(r4),  12345678h
+
 	add	r0,  r1,  r2
 	add	r12, r13, r15
 	sub	r0,  r1,  r2
