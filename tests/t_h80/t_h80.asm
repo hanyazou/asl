@@ -180,6 +180,9 @@
 	ex	r25, r10
 	ex	r30, r5
 	ex	r31, r0
+	ex	r0, r0
+	ex	r15, r15
+	ex	r0, r15
 
 ;  0 1110_aaaa_bbbb reserved
 ;  0 1111_aaaa_bbbb reserved

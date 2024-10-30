@@ -294,7 +294,7 @@ static ins_t I_EX_R_R(reg_num_t a, reg_num_t b) {
   if (((a>>4)&1) && ~((b>>4)&1))
     return 0x0c00 | (a << 4) | b;
   else
-  if (~((a>>4)&1) && ((b>>4)&1))
+  if ((~((a>>4)&1) && ((b>>4)&1)) || (~((a>>4)&1) && ~((b>>4)&1)))
     return 0x0c00 | (b << 4) | a;
   else
     return I_INV();
