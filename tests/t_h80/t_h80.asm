@@ -53,6 +53,14 @@
 	neg	r5
 	neg	r10
 	neg	r15
+	inc	r0
+	inc	r5
+	inc	r10
+	inc	r15
+	dec	r0
+	dec	r5
+	dec	r10
+	dec	r15
 	ld.w	r0, 3210h
 	ld.w	r5, 7654h
 	ld.w	r10, 1032h

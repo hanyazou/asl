@@ -446,6 +446,8 @@ enum {
   G_OR,
   G_XOR,
   G_CP,
+  G_INC,
+  G_DEC,
 };
 
 /*!------------------------------------------------------------------------
@@ -1005,6 +1007,8 @@ static void DecodeReg1(Word Code)
   case G_EXTN_B:
   case G_CPL:
   case G_NEG:
+  case G_INC:
+  case G_DEC:
     if (15 < r) {
       WrError(ErrNum_ArgOutOfRange);
       return;
@@ -1020,6 +1024,8 @@ static void DecodeReg1(Word Code)
   case G_EXTN_B:    AppendIns(I_EXTN_RB(r));    break;
   case G_CPL:       AppendIns(I_CPL_R(r));      break;
   case G_NEG:       AppendIns(I_NEG_R(r));      break;
+  case G_INC:       AppendIns(I_ADD_R_I(r, 1)); break;
+  case G_DEC:       AppendIns(I_SUB_R_I(r, 1)); break;
   default: WrError(ErrNum_InternalError); return;
   }
 }
@@ -1615,6 +1621,8 @@ static void InitFields(void)
   AddInstTable(InstTable, "EXTN.B", G_EXTN_B,           DecodeReg1);
   AddInstTable(InstTable, "CPL",    G_CPL,              DecodeReg1);
   AddInstTable(InstTable, "NEG",    G_NEG,              DecodeReg1);
+  AddInstTable(InstTable, "INC",    G_INC,              DecodeReg1);
+  AddInstTable(InstTable, "DEC",    G_DEC,              DecodeReg1);
 
   AddInstTable(InstTable, "EX",     G_EX,               DecodeReg2);
 
